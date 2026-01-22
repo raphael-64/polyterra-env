@@ -1,0 +1,13 @@
+Metadata-Version: 2.2
+Name: polyterra-env
+Version: 0.1.0
+Summary: PettingZoo environment for Polytopia game
+Author: Polyterra Team
+Requires-Python: >=3.8
+Requires-Dist: pettingzoo>=1.24.0
+Requires-Dist: gymnasium>=0.29.0
+Requires-Dist: numpy>=1.21.0
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

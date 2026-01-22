@@ -1,0 +1,33 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 14
+VisualStudioVersion = 14.0.24720.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameLogicAssembly", "GameLogicAssembly/GameLogicAssembly.csproj", "{74B2F5FB-D656-42D5-B61F-F25F42BEA75A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PolytopiaAssembly", "PolytopiaAssembly/PolytopiaAssembly.csproj", "{87A18CBA-28C5-422F-B585-143122C68E9C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PolytopiaBackendBase", "PolytopiaBackendBase/PolytopiaBackendBase.csproj", "{AE235A2C-468E-48DC-92A0-F87123D4FC70}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|AnyCPU = Debug|AnyCPU
+		Release|AnyCPU = Release|AnyCPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{74B2F5FB-D656-42D5-B61F-F25F42BEA75A}.Debug|AnyCPU.ActiveCfg = Debug|AnyCPU
+		{74B2F5FB-D656-42D5-B61F-F25F42BEA75A}.Debug|AnyCPU.Build.0 = Debug|AnyCPU
+		{74B2F5FB-D656-42D5-B61F-F25F42BEA75A}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
+		{74B2F5FB-D656-42D5-B61F-F25F42BEA75A}.Release|AnyCPU.Build.0 = Release|AnyCPU
+		{87A18CBA-28C5-422F-B585-143122C68E9C}.Debug|AnyCPU.ActiveCfg = Debug|AnyCPU
+		{87A18CBA-28C5-422F-B585-143122C68E9C}.Debug|AnyCPU.Build.0 = Debug|AnyCPU
+		{87A18CBA-28C5-422F-B585-143122C68E9C}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
+		{87A18CBA-28C5-422F-B585-143122C68E9C}.Release|AnyCPU.Build.0 = Release|AnyCPU
+		{AE235A2C-468E-48DC-92A0-F87123D4FC70}.Debug|AnyCPU.ActiveCfg = Debug|AnyCPU
+		{AE235A2C-468E-48DC-92A0-F87123D4FC70}.Debug|AnyCPU.Build.0 = Debug|AnyCPU
+		{AE235A2C-468E-48DC-92A0-F87123D4FC70}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
+		{AE235A2C-468E-48DC-92A0-F87123D4FC70}.Release|AnyCPU.Build.0 = Release|AnyCPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

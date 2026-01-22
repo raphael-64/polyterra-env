@@ -1,0 +1,972 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading;
+using System.Threading.Tasks;
+using K4os.Compression.LZ4;
+using Microsoft.AspNetCore.Http.Connections.Client;
+using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using PolytopiaBackendBase.Auth;
+using PolytopiaBackendBase.Challengermode;
+using PolytopiaBackendBase.Challengermode.Data;
+using PolytopiaBackendBase.Challengermode.GameIntegration.BindingModels;
+using PolytopiaBackendBase.Common;
+using PolytopiaBackendBase.Game;
+using PolytopiaBackendBase.Game.BindingModels;
+using PolytopiaBackendBase.Notifications;
+
+namespace PolytopiaBackendBase;
+
+public abstract class BackendAdapter : IGameClient, IGameHub
+{
+	public BaseClient BackendHttpClient;
+
+	public HubConnection HubConnection;
+
+	public ConnectionStatus ConnectionStatus;
+
+	public Uri BackendUri { get; private set; }
+
+	public Uri GameHubUri => new Uri(BackendUri, "/gamehub");
+
+	public PolytopiaToken ClientUserData { get; private set; }
+
+	public bool IsConnected
+	{
+		get
+		{
+			HubConnection hubConnection = HubConnection;
+			return ((hubConnection != null) ? hubConnection.ConnectionId : null) != null;
+		}
+	}
+
+	public bool IsAuthenticated => HasValidAccessToken();
+
+	public LogLevel SignalRLogLevel { get; private set; }
+
+	private List<ILoggerProvider> LoggerProviders { get; set; }
+
+	private List<ILogger> Loggers { get; set; }
+
+	public LZ4Options LZ4Options { get; set; } = new LZ4Options();
+
+	public BackendAdapter()
+	{
+		BackendUri = null;
+		LoggerProviders = new List<ILoggerProvider>();
+		SignalRLogLevel = (LogLevel)3;
+		ConnectionStatus = ConnectionStatus.None;
+	}
+
+	public BackendAdapter UseBackendUri(Uri backendUri)
+	{
+		BackendUri = backendUri;
+		return this;
+	}
+
+	public BackendAdapter UseLoggerProvider<TLoggerProvider>() where TLoggerProvider : ILoggerProvider, new()
+	{
+		LoggerProviders.Add((ILoggerProvider)(object)new TLoggerProvider());
+		Loggers = LoggerProviders.Select((ILoggerProvider provider) => provider.CreateLogger("BackendAdapter")).ToList();
+		return this;
+	}
+
+	public BackendAdapter ConfigureSignalRLogLevel(LogLevel logLevel)
+	{
+		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0018: Unknown result type (might be due to invalid IL or missing references)
+		Log($"Setting signalR LogLevel {logLevel}", (LogLevel)2);
+		SignalRLogLevel = logLevel;
+		return this;
+	}
+
+	public BackendAdapter UseHttpClient<THttpClient>() where THttpClient : BaseClient, new()
+	{
+		THttpClient val = new THttpClient();
+		((HttpClient)val).BaseAddress = BackendUri;
+		BackendHttpClient = val;
+		return this;
+	}
+
+	public BackendAdapter ConfigureLZ4Compression(Action<LZ4Options> options)
+	{
+		if (options == null)
+		{
+			throw new ArgumentNullException("options");
+		}
+		options(LZ4Options);
+		return this;
+	}
+
+	public BackendAdapter ConfigureHttpClient(Action<HttpClient> configureHttpClient)
+	{
+		if (configureHttpClient == null)
+		{
+			throw new ArgumentNullException("configureHttpClient");
+		}
+		configureHttpClient((HttpClient)(object)BackendHttpClient);
+		return this;
+	}
+
+	public TBackendAdapter UseAs<TBackendAdapter>() where TBackendAdapter : BackendAdapter
+	{
+		Log($"Backendadapter set up using {BackendUri} (port: {BackendUri.Port})", (LogLevel)1);
+		return this as TBackendAdapter;
+	}
+
+	public abstract Task Login(bool connect = true, bool silent = false);
+
+	protected abstract Task CacheUserProfileData(PolytopiaUserViewModel polytopiaUserViewModel);
+
+	protected abstract Task StoreJwtToken(string jwtToken);
+
+	protected abstract Task<string> LoadJwtToken();
+
+	public async Task Connect()
+	{
+		_ = 1;
+		try
+		{
+			HubConnection = HubConnectionBuilderExtensions.WithAutomaticReconnect(HubConnectionBuilderExtensions.ConfigureLogging(NewtonsoftAotProtocolDependencyInjectionExtensions.AddNewtonsoftAotProtocol<IHubConnectionBuilder>(HubConnectionBuilderHttpExtensions.WithUrl((IHubConnectionBuilder)new HubConnectionBuilder(), GameHubUri, (Action<HttpConnectionOptions>)delegate(HttpConnectionOptions options)
+			{
+				options.AccessTokenProvider = AccessTokenProvider;
+				options.SkipNegotiation = false;
+			})), (Action<ILoggingBuilder>)delegate(ILoggingBuilder options)
+			{
+				//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+				LoggingBuilderExtensions.SetMinimumLevel(options, SignalRLogLevel);
+				foreach (ILoggerProvider loggerProvider in LoggerProviders)
+				{
+					LoggingBuilderExtensions.AddProvider(options, loggerProvider);
+				}
+			})).Build();
+			BindClientMethods();
+			await HubConnection.StartAsync(default(CancellationToken));
+			await SubscribeOnConnect();
+			HubConnection.Reconnecting += OnReconnecting;
+			HubConnection.Reconnected += OnReconnected;
+			HubConnection.Closed += OnClosed;
+		}
+		catch (Exception ex)
+		{
+			Log("Could not connect to backend", (LogLevel)4);
+			Log(ex, (LogLevel)5);
+			throw ex;
+		}
+	}
+
+	public async Task EnsureAuthenticatedAsync()
+	{
+		if (!IsAuthenticated)
+		{
+			InvalidateToken();
+			await Login(connect: true, silent: true);
+		}
+	}
+
+	private async Task<string> AccessTokenProvider()
+	{
+		Log("Entering AccessTokenProvider", (LogLevel)1);
+		if (!HasValidAccessToken())
+		{
+			Log("Jwt token expired, logging in again", (LogLevel)1);
+			InvalidateToken();
+			await Login(connect: true, silent: true);
+		}
+		return ClientUserData?.JwtToken;
+	}
+
+	private bool HasValidAccessToken()
+	{
+		string obj = ClientUserData?.JwtToken;
+		DateTime? dateTime = ClientUserData?.ExpiresAt;
+		if (obj != null && dateTime.HasValue)
+		{
+			DateTime utcNow = DateTime.UtcNow;
+			DateTime? dateTime2 = dateTime;
+			return utcNow < dateTime2;
+		}
+		return false;
+	}
+
+	private void InvalidateToken()
+	{
+		if (ClientUserData != null)
+		{
+			ClientUserData.JwtToken = null;
+			ClientUserData.ExpiresAt = null;
+		}
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> LoginSteam(SteamLoginBindingModel model)
+	{
+		Log($"Login::Steam (handle={model.SteamAuthTicket.Handle})", (LogLevel)1);
+		ServerResponse<PolytopiaToken> response = await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Post, "api/auth/login_steam", null, model));
+		await HandleLoginResponse(response);
+		return response;
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> LoginGooglePlay(LoginGooglePlayBindingModel model)
+	{
+		Log($"Login::GooglePlay, AuthCode: {model.AuthCode}, URI: {BackendUri}", (LogLevel)1);
+		ServerResponse<PolytopiaToken> response = await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Post, "api/auth/login_google_play", null, model));
+		await HandleLoginResponse(response);
+		return response;
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> LoginTesla(LoginTeslaBindingModel model)
+	{
+		Log("Login::Tesla, AuthToken: " + model.AuthToken, (LogLevel)1);
+		ServerResponse<PolytopiaToken> response = await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Post, "api/auth/login_tesla", null, model));
+		await HandleLoginResponse(response);
+		return response;
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> LoginIos(LoginGameCenterBindingModel model)
+	{
+		Log("Login::Ios, Id: " + model.GameCenterId + ", userName: " + model.Username, (LogLevel)1);
+		ServerResponse<PolytopiaToken> response = await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Post, "api/auth/login_ios", null, model));
+		await HandleLoginResponse(response);
+		return response;
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> LoginFake(LoginFakeBindingModel model)
+	{
+		Log("Login::Fake (" + model.UserName + ")", (LogLevel)1);
+		ServerResponse<PolytopiaToken> response = await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Post, "api/auth/login_fake", null, model));
+		await HandleLoginResponse(response);
+		return response;
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> LoginDebugLegacyUser(LoginFakeBindingModel model)
+	{
+		Log("Login::Fake (" + model.UserName + ")", (LogLevel)1);
+		ServerResponse<PolytopiaToken> response = await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Post, "api/auth/login_debug_legacy", null, model));
+		await HandleLoginResponse(response);
+		return response;
+	}
+
+	public async Task<ServerResponse<PolytopiaToken>> WhoAmI()
+	{
+		Log("whoami", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<PolytopiaToken>>(HttpMethod.Get, "api/auth/whoami"));
+	}
+
+	private async Task HandleLoginResponse(ServerResponse<PolytopiaToken> response)
+	{
+		if (response.Success)
+		{
+			await HandleLoginResponse(response.Data);
+		}
+	}
+
+	private async Task HandleLoginResponse(PolytopiaToken token)
+	{
+		if (token == null)
+		{
+			InvalidateToken();
+			return;
+		}
+		ClientUserData = token;
+		((HttpClient)BackendHttpClient).DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ClientUserData.JwtToken);
+		await StoreJwtToken(ClientUserData.JwtToken);
+		await CacheUserProfileData(ClientUserData.User);
+		Log(ClientUserData, (LogLevel)1);
+	}
+
+	private async Task SubscribeOnConnect()
+	{
+		await SubscribeToParticipatingGameSummaries();
+		await SubscribeToFriends();
+	}
+
+	public async Task CloseConnection()
+	{
+		if (IsConnected)
+		{
+			await HubConnection.StopAsync(default(CancellationToken));
+		}
+		if (IsAuthenticated)
+		{
+			await Logout();
+		}
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> Logout()
+	{
+		ClientUserData = null;
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/auth/logout"));
+	}
+
+	[Obsolete("This method is obsolete since 2021-01-18, Game version 30, semantic version 2.0.37 is the next version as to this date. Call SetNotificationToken instead.", true)]
+	public async Task<ServerResponse<ResponseViewModel>> SetFCMToken(string token)
+	{
+		Log("FCM token received: (" + token + ")", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SetFCMToken", (object)token, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SetNotificationToken(NotificationTokenBindingModel model)
+	{
+		Log($"Notification token received: ({model.Token}, {model.NotificationBackend})", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SetNotificationToken", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameViewModel>> CreateGame(CreateGameBindingModel model)
+	{
+		Log("Creating new game", (LogLevel)1);
+		ServerResponse<GameViewModel> serverResponse = await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameViewModel>>(HubConnection, "CreateGame", (object)model, default(CancellationToken)));
+		if (serverResponse.Data != null)
+		{
+			Log($"Game created: {serverResponse.Data.Id}", (LogLevel)1);
+		}
+		return serverResponse;
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> TrackFinishedGame(FinishedGameBindingModel model)
+	{
+		Log($"Submitting finshed game request {model.DeviceId} {model.GameType}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "TrackFinishedGame", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<MatchmakingSubmissionViewModel>> SubmitMatchmakingRequest(SubmitMatchmakingBindingModel model)
+	{
+		Log("Submitting matchmaking request", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<MatchmakingSubmissionViewModel>>(HubConnection, "SubmitMatchmakingRequest", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameViewModel>> GetGameViewModelByIdAsync(Guid gameId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameViewModel>>(HubConnection, "GetGameViewModelByIdAsync", (object)gameId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameViewModel>> GetGameSpectateViewModelByIdAsync(Guid gameId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameViewModel>>(HubConnection, "GetGameSpectateViewModelByIdAsync", (object)gameId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameSummaryViewModel>> GetGameSummaryViewModelByIdAsync(Guid gameId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameSummaryViewModel>>(HubConnection, "GetGameSummaryViewModelByIdAsync", (object)gameId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<GameViewModel>> GetGamesByOwner()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<GameViewModel>>(HubConnection, "GetGamesByOwner", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<GameViewModel>> GetGamesByParticipation()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<GameViewModel>>(HubConnection, "GetGamesByParticipation", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<GameSummaryViewModel>> GetGameSummariesByOwner()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<GameSummaryViewModel>>(HubConnection, "GetGameSummariesByOwner", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<GameSummaryViewModel>> GetGameSummariesByParticipation()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<GameSummaryViewModel>>(HubConnection, "GetGameSummariesByParticipation", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameListingViewModel>> GetGameListings()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameListingViewModel>>(HubConnection, "GetGameListings", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameListingViewModel>> GetGameListingsV2()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameListingViewModel>>(HubConnection, "GetGameListingsV2", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameListingViewModel>> GetGameListingsV3()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameListingViewModel>>(HubConnection, "GetGameListingsV3", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<MatchmakingGameSummaryViewModel>> GetMatchmakingGameById(long gameId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<MatchmakingGameSummaryViewModel>>(HubConnection, "GetMatchmakingGameById", (object)gameId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GameViewModel>> JoinGame(Guid gameId)
+	{
+		Log($"Joining game {gameId}", (LogLevel)1);
+		ServerResponse<GameViewModel> serverResponse = await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameViewModel>>(HubConnection, "JoinGame", (object)gameId, default(CancellationToken)));
+		if (serverResponse.Data != null)
+		{
+			Log($"Game joined: {serverResponse.Data.Id}", (LogLevel)1);
+		}
+		return serverResponse;
+	}
+
+	public async Task<ServerResponse<GameViewModel>> SpectateGame(Guid gameId)
+	{
+		Log($"Downloading game to spectate: {gameId}", (LogLevel)1);
+		ServerResponse<GameViewModel> serverResponse = await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GameViewModel>>(HubConnection, "SpectateGame", (object)gameId, default(CancellationToken)));
+		if (serverResponse.Data != null)
+		{
+			Log($"Game loaded: {serverResponse.Data.Id}", (LogLevel)1);
+		}
+		return serverResponse;
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> Resign(ResignBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "Resign", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> LeaveMatchmakingGame(long matchmakingGameId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "LeaveMatchmakingGame", (object)matchmakingGameId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> LeaveAllMatchmakingGames()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "LeaveAllMatchmakingGames", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> Kick(KickBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "Kick", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SkipTurn(SkipTurnBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SkipTurn", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> RemindPlayer(RemindPlayerBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "RemindPlayer", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SetParticipationDone(SetParticipationDoneBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SetParticipationDone", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SetParticipationFailedParse(SetParticipationHasFailedParseBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SetParticipationFailedParse", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<GameSummaryViewModel>> GetRecentGames(RecentGamesBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<GameSummaryViewModel>>(HubConnection, "GetRecentGames", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SaveGame(SaveGameBindingModel model)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SaveGame", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<GameSummaryViewModel>> GetSavedGames()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<GameSummaryViewModel>>(HubConnection, "GetSavedGames", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SubscribeToGame(SubscribeToGameBindingModel model)
+	{
+		Log($"Subscribing to {model.SubscriptionType}, {model.GameId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SubscribeToGame", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SubscribeToGameSummaries(SubscribeToGameSummariesBindingModel model)
+	{
+		Log("Subscribing to game summaries: " + string.Join(",", model.GameIds.ToArray()), (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SubscribeToGameSummaries", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SubscribeToParticipatingGameSummaries()
+	{
+		Log("Subscribing to participating game summaries", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SubscribeToParticipatingGameSummaries", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SubscribeToFriends()
+	{
+		Log("Subscribing to friends", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SubscribeToFriends", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UnsubscribeToGame(UnsubscribeToGameBindingModel model)
+	{
+		Log($"Unsubscribing to {model.SubscriptionType}, {model.GameId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "UnsubscribeToGame", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UnsubscribeToParticipatingGameSummaries()
+	{
+		Log("Unsubscribing to all summaries by participation", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "UnsubscribeToParticipatingGameSummaries", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SendCommand(SendCommandBindingModel model)
+	{
+		Log($"Sending command {model.GameId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SendCommand", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> PickTribe(PickTribeBindingModel model)
+	{
+		Log($"Picking tribe. GameId: {model.GameId}, TribeType: {model.TribeType}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "PickTribe", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> StartGame(StartGameBindingModel model)
+	{
+		Log($"Starting game. GameId: {model.GameId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "StartGame", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UploadHighscores(UploadHighscoresBindingModel model)
+	{
+		Log("Uploading highscores.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async delegate
+		{
+			bool useLZ4Compression = LZ4Options.UseLZ4Compression;
+			UploadHighscoresBindingModel uploadHighscoresBindingModel = new UploadHighscoresBindingModel
+			{
+				InitialGameStateData = (useLZ4Compression ? LZ4Pickler.Pickle(model.InitialGameStateData, (LZ4Level)0) : model.InitialGameStateData),
+				CurrentGameStateData = (useLZ4Compression ? LZ4Pickler.Pickle(model.CurrentGameStateData, (LZ4Level)0) : model.CurrentGameStateData),
+				LZ4Compressed = useLZ4Compression
+			};
+			return await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "UploadHighscores", (object)uploadHighscoresBindingModel, default(CancellationToken));
+		});
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UploadHighscoresHttp(UploadHighscoresBindingModel model)
+	{
+		Log("Uploading highscores.", (LogLevel)1);
+		if (!HasValidAccessToken())
+		{
+			await Login(connect: true, silent: true);
+		}
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/game/upload_highscores", null, model));
+	}
+
+	public async Task<ServerResponseList<HighscoreViewModel>> GetHighscores(TribeHighscoresBindingModel model)
+	{
+		Log("Retrieve highscores. TribeType: " + (model.TribeType?.ToString() ?? "none"), (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<HighscoreViewModel>>(HubConnection, "GetHighscores", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<HighscoreViewModel>> GetHighscoresHttp(TribeHighscoresBindingModel model)
+	{
+		Log("Retrieve highscores (httpclient). TribeType: " + (model.TribeType?.ToString() ?? "none"), (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponseList<HighscoreViewModel>>(HttpMethod.Post, "api/game/get_highscores", null, model));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UploadTribeRating(UploadTribeRatingBindingModel model)
+	{
+		Log("Uploading tribe rating.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "UploadTribeRating", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UploadTribeRatingHttp(UploadTribeRatingBindingModel model)
+	{
+		Log("Uploading tribe rating.", (LogLevel)1);
+		if (!HasValidAccessToken())
+		{
+			await Login(connect: true, silent: true);
+		}
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/game/upload_triberating", null, model));
+	}
+
+	public async Task<ServerResponse<TribeRatingsViewModel>> GetTribeRatings()
+	{
+		Log("Retrieving tribe ratings.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<TribeRatingsViewModel>>(HubConnection, "GetTribeRatings", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<TribeRatingsViewModel>> GetTribeRatingsHttp()
+	{
+		Log("Retrieving tribe ratings.", (LogLevel)1);
+		if (!HasValidAccessToken())
+		{
+			await Login(connect: true, silent: true);
+		}
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<TribeRatingsViewModel>>(HttpMethod.Post, "api/game/get_triberating"));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> ClearTribeRatings()
+	{
+		Log("Clearing tribe ratings.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "ClearTribeRatings", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> ClearTribeRatingsHttp()
+	{
+		Log("Clearing tribe ratings.", (LogLevel)1);
+		if (!HasValidAccessToken())
+		{
+			await Login(connect: true, silent: true);
+		}
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/game/clear_triberating"));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UploadNumSingleplayerGames(UploadNumSingleplayerGamesBindingModel model)
+	{
+		Log("Uploading number of played singleplayer games.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "UploadNumSingleplayerGames", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UploadNumSingleplayerGamesHttp(UploadNumSingleplayerGamesBindingModel model)
+	{
+		Log("Uploading number of played singleplayer games.", (LogLevel)1);
+		if (!HasValidAccessToken())
+		{
+			await Login(connect: true, silent: true);
+		}
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/game/upload_numsingleplayergames", null, model));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> RespondToInvitation(RespondToInvitationBindingModel model)
+	{
+		Log($"Responding to game invitation: {model.GameId} (accepted = {model.Accepted})", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "RespondToInvitation", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> UpdateAvatar(AvatarBindingModel model)
+	{
+		Log("Updating avatar", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "UpdateAvatar", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<PolytopiaFriendViewModel>> SearchUsers(SearchUsersBindingModel model)
+	{
+		Log("Searching for users: " + model.SearchString, (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<PolytopiaFriendViewModel>>(HubConnection, "SearchUsers", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<PlayersStatusesResponse>> SubscribeToGameParticipantsStatuses(SubscribeToGameParticipantsStatusesBindingModel model)
+	{
+		Log("Subscribing to game participants", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<PlayersStatusesResponse>>(HubConnection, "SubscribeToGameParticipantsStatuses", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<PolytopiaUserViewModel>> GetUserViewModelsByIds(List<Guid> userIds)
+	{
+		Log("Getting friends", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<PolytopiaUserViewModel>>(HubConnection, "GetUserViewModelsByIds", (object)userIds, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<PlayersStatusesResponse>> GetFriendsStatuses()
+	{
+		Log("Getting friends statuses", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<PlayersStatusesResponse>>(HubConnection, "GetFriendsStatuses", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponseList<PolytopiaFriendViewModel>> GetFriends()
+	{
+		Log("Getting friends", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponseList<PolytopiaFriendViewModel>>(HubConnection, "GetFriends", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SendFriendRequest(FriendRequestBindingModel model)
+	{
+		Log($"Sending friend request: {model.FriendUserId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "SendFriendRequest", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> AcceptFriendRequest(FriendRequestBindingModel model)
+	{
+		Log($"Accepting friend request: {model.FriendUserId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "AcceptFriendRequest", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> RemoveFriend(FriendRequestBindingModel model)
+	{
+		Log($"Removing friend: {model.FriendUserId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ResponseViewModel>>(HubConnection, "RemoveFriend", (object)model, default(CancellationToken)));
+	}
+
+	private void BindClientMethods()
+	{
+		HubConnection.BindMethod<string>(OnNotify);
+		HubConnection.BindMethod<CommandArrayViewModel>(OnCommand);
+		HubConnection.BindMethod<GameStateViewModel, StateUpdateReason>(OnGameStateUpdated);
+		HubConnection.BindMethod<GameSummaryViewModel, StateUpdateReason>(OnGameSummaryUpdated);
+		HubConnection.BindMethod<Guid>(OnGameDeleted);
+		HubConnection.BindMethod<long, MatchmakingUpdateReason>(OnMatchmakingGameUpdated);
+		HubConnection.BindMethod<PlayerResignedViewModel>(OnPlayerResigned);
+		HubConnection.BindMethod<PlayerSkippedViewModel>(OnPlayerSkipped);
+		HubConnection.BindMethod<Guid>(OnInvitation);
+		HubConnection.BindMethod<LobbyGameViewModel>(OnLobbyInvitation);
+		HubConnection.BindMethod<Guid>(OnGameReadyToStart);
+		HubConnection.BindMethod<List<PolytopiaFriendViewModel>>(OnFriendsUpdated);
+		HubConnection.BindMethod<Guid, PlayerStatus>(OnPlayerStatusUpdated);
+		HubConnection.BindMethod<LobbyGameViewModel>(OnLobbyUpdated);
+		HubConnection.BindMethod<PolytopiaUserViewModel>(OnUserUpdated);
+		HubConnection.BindMethod<Guid>(OnFriendRequestReceived);
+		HubConnection.BindMethod<Guid>(OnFriendRequestAccepted);
+		HubConnection.BindMethod<int>(OnActionableGamesUpdated);
+		HubConnection.BindMethod<TournamentViewModel, TournamentUpdateReason>(OnTournamentUpdated);
+	}
+
+	public abstract Task OnNotify(string message);
+
+	public abstract Task OnCommand(CommandArrayViewModel model);
+
+	public abstract Task OnGameStateUpdated(GameStateViewModel model, StateUpdateReason pushReason);
+
+	public abstract Task OnGameSummaryUpdated(GameSummaryViewModel model, StateUpdateReason pushReason);
+
+	public abstract Task OnGameDeleted(Guid gameId);
+
+	public abstract Task OnMatchmakingGameUpdated(long gameId, MatchmakingUpdateReason pushReason);
+
+	public abstract Task OnPlayerResigned(PlayerResignedViewModel playerResignedViewModel);
+
+	public abstract Task OnPlayerSkipped(PlayerSkippedViewModel playerSkippedViewModel);
+
+	public abstract Task OnInvitation(Guid gameId);
+
+	public abstract Task OnLobbyInvitation(LobbyGameViewModel lobby);
+
+	public abstract Task OnGameReadyToStart(Guid gameId);
+
+	public abstract Task OnFriendsUpdated(List<PolytopiaFriendViewModel> friends);
+
+	public abstract Task OnPlayerStatusUpdated(Guid playerId, PlayerStatus status);
+
+	public abstract Task OnLobbyUpdated(LobbyGameViewModel lobby);
+
+	public abstract Task OnUserUpdated(PolytopiaUserViewModel user);
+
+	public abstract Task OnFriendRequestReceived(Guid frienduserId);
+
+	public abstract Task OnFriendRequestAccepted(Guid frienduserId);
+
+	public abstract Task OnActionableGamesUpdated(int count);
+
+	public abstract Task OnTournamentUpdated(TournamentViewModel tournament, TournamentUpdateReason reason);
+
+	protected void Log(object message, LogLevel level = (LogLevel)1)
+	{
+		//IL_0007: Unknown result type (might be due to invalid IL or missing references)
+		//IL_0008: Unknown result type (might be due to invalid IL or missing references)
+		Loggers.ForEach(delegate(ILogger logger)
+		{
+			//IL_0002: Unknown result type (might be due to invalid IL or missing references)
+			LoggerExtensions.Log(logger, level, message.ToString(), Array.Empty<object>());
+		});
+	}
+
+	public async Task LogStatus()
+	{
+		if (IsConnected)
+		{
+			Log("Connected to backend -> \n  Hubconnection: " + HubConnection.ConnectionId, (LogLevel)1);
+		}
+		else
+		{
+			Log("Not connected to game hub.", (LogLevel)1);
+		}
+		Log(await WhoAmI(), (LogLevel)1);
+	}
+
+	public async Task<ServerResponse<NewsObject>> GetNews(DateTime? startDate)
+	{
+		Log("Getting news.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<NewsObject>>(HttpMethod.Post, "api/news/get_news", null, new GetNewsBindingModel
+		{
+			StartDate = startDate
+		}));
+	}
+
+	public async Task<ServerResponse<SteamNotificationsModels.RequestSteamNotificationsResponse>> RequestSteamNotifications(string steamId)
+	{
+		Log("Requesting steam notifications.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<SteamNotificationsModels.RequestSteamNotificationsResponse>>(HttpMethod.Post, "api/auth/steam_notifications", null, new SteamNotificationsModels.RequestSteamNotificationsBindingModel
+		{
+			SteamId = steamId
+		}));
+	}
+
+	public async Task<ServerResponse<StartViewModel>> GetStartViewModel(StartBindingModel bindingModel)
+	{
+		if (!HasValidAccessToken())
+		{
+			await Login(connect: true, silent: true);
+		}
+		string path = "api/start/get_start_viewmodel";
+		Log($"Getting start viewmodel. {BackendUri}{path}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<StartViewModel>>(HttpMethod.Post, path, null, bindingModel));
+	}
+
+	public async Task<ServerResponse<VersioningViewModel>> GetVersioning(VersioningBindingModel bindingModel)
+	{
+		Log("Getting versioning viewmodel.", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<VersioningViewModel>>(HttpMethod.Post, "api/start/get_versioning", null, bindingModel));
+	}
+
+	public abstract Task OnReconnecting(Exception exception);
+
+	protected virtual async Task OnReconnected(string connectionId)
+	{
+		await SubscribeOnConnect();
+	}
+
+	public abstract Task OnClosed(Exception exception);
+
+	public async Task<ServerResponse<LobbyGameViewModel>> CreateLobby(CreateLobbyBindingModel model)
+	{
+		Log("Creating lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LobbyGameViewModel>>(HubConnection, "CreateLobby", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<BoolResponseViewModel>> DeleteLobby(DeleteLobbyBindingModel model)
+	{
+		Log("Deleting lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<BoolResponseViewModel>>(HubConnection, "DeleteLobby", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<BoolResponseViewModel>> ModifyPlayersInLobby(ModifyPlayersInLobbyBindingModel model)
+	{
+		Log("Modify players in lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<BoolResponseViewModel>>(HubConnection, "ModifyPlayersInLobby", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<BoolResponseViewModel>> SubscribeToLobby(SubscribeToLobbyBindingModel model)
+	{
+		Log("Subscribed to lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<BoolResponseViewModel>>(HubConnection, "SubscribeToLobby", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LobbyGameViewModel>> GetLobby(GetLobbyBindingModel model)
+	{
+		Log("Get lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LobbyGameViewModel>>(HubConnection, "GetLobby", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LobbyGameViewModel>> RespondToLobbyInvitation(RespondToLobbyInvitation model)
+	{
+		Log("Respond to invitation lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LobbyGameViewModel>>(HubConnection, "RespondToLobbyInvitation", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LobbyGameViewModel>> ActivateLobbyLinkInvitations(ActivateLobbyLinkInvitationsBindingModel model)
+	{
+		Log("Activate link lobby invitations", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LobbyGameViewModel>>(HubConnection, "ActivateLobbyLinkInvitations", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<BoolResponseViewModel>> ChangeTribeInLobby(ChangeTribeInLobbyModel model)
+	{
+		Log("Change tribe in lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<BoolResponseViewModel>>(HubConnection, "ChangeTribeInLobby", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GuidResponseViewModel>> GetInLobbyId()
+	{
+		Log("Get in lobby id", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GuidResponseViewModel>>(HubConnection, "GetInLobbyId", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<GetLobbyInvitationsViewModel>> GetLobbiesInvitations()
+	{
+		Log("Get lobby invitations", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<GetLobbyInvitationsViewModel>>(HubConnection, "GetLobbiesInvitations", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<BoolResponseViewModel>> UpdateLobbySettings(UpdateLobbySettingsBindingModel model)
+	{
+		Log("Update lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<BoolResponseViewModel>>(HubConnection, "UpdateLobbySettings", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LobbyGameViewModel>> StartLobbyGame(StartLobbyBindingModel model)
+	{
+		Log("Start lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LobbyGameViewModel>>(HubConnection, "StartLobbyGame", (object)model, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<BoolResponseViewModel>> LeaveLobby(Guid lobbyId)
+	{
+		Log("Leave lobby", (LogLevel)1);
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<BoolResponseViewModel>>(HubConnection, "LeaveLobby", (object)lobbyId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<CmLinkAccountResponse>> LinkAccountAsync(string ott)
+	{
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<CmLinkAccountResponse>>(HttpMethod.Post, "api/auth/link_cm_account", null, new CmLinkAccountBindingModel
+		{
+			Ott = ott
+		}));
+	}
+
+	public async Task<ServerResponse<TournamentViewModel>> GetTournament(Guid id)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<TournamentViewModel>>(HubConnection, "GetTournament", (object)id, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<TournamentListViewModel>> GetTournamentList(GetTournamentListBindingModel bindingModel)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<TournamentListViewModel>>(HubConnection, "GetTournamentList", (object)bindingModel, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<CmStartOAuthFlowResponse>> StartOauthFlow(CmStartOAuthFlowBindingModel bindingModel)
+	{
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<CmStartOAuthFlowResponse>>(HttpMethod.Post, "api/cm/start_oauth_flow", null, bindingModel));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> ConnectChallengermode(CmConnectChallengermodeBindingModel bindingModel)
+	{
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/cm/connect_challengermode", null, bindingModel));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> JoinLadder(JoinLadderBindingModel bindingModel)
+	{
+		Log($"Join ladder: {bindingModel.LadderId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/cm/join_ladder", null, bindingModel));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> SignupToTournament(SignupTournamentBindingModel bindingModel)
+	{
+		Log($"Signup to tournament: {bindingModel.TournamentId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/cm/signup_tournament", null, bindingModel));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> ConfirmTournament(ConfirmTournamentBindingModel bindingModel)
+	{
+		Log($"Confirm for tournament: {bindingModel.TournamentId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/cm/confirm_tournament", null, bindingModel));
+	}
+
+	public async Task<ServerResponse<ResponseViewModel>> LeaveTournament(LeaveTournamentBindingModel bindingModel)
+	{
+		Log($"Leaving tournament: {bindingModel.TournamentId}", (LogLevel)1);
+		return await ServerResponseHelpers.ClientHttpErrorHandledResponse(async () => await BackendHttpClient.CallAsync<ServerResponse<ResponseViewModel>>(HttpMethod.Post, "api/cm/leave_tournament", null, bindingModel));
+	}
+
+	public async Task<ServerResponse<ChallengermodeConnectionStatus>> GetChallengermodeConnectionStatus()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<ChallengermodeConnectionStatus>>(HubConnection, "GetChallengermodeConnectionStatus", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<RecurringLadderViewModel>> GetRecurringLadder()
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<RecurringLadderViewModel>>(HubConnection, "GetRecurringLadder", default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LadderViewModel>> GetLadderDetails(Guid ladderId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LadderViewModel>>(HubConnection, "GetLadderDetails", (object)ladderId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LadderPlacementsViewModel>> GetLadderPlacements(Guid ladderId)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LadderPlacementsViewModel>>(HubConnection, "GetLadderPlacements", (object)ladderId, default(CancellationToken)));
+	}
+
+	public async Task<ServerResponse<LadderMatchesViewModel>> GetLadderMatches(GetLadderMatchesBindingModel bindingModel)
+	{
+		return await ServerResponseHelpers.ClientErrorHandledResponse(async () => await HubConnectionExtensions.InvokeAsync<ServerResponse<LadderMatchesViewModel>>(HubConnection, "GetLadderMatches", (object)bindingModel, default(CancellationToken)));
+	}
+}

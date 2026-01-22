@@ -1,0 +1,15 @@
+using System;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
+
+namespace PolytopiaBackendBase;
+
+public class RequireObjectPropertiesContractResolver : DefaultContractResolver
+{
+	protected override JsonObjectContract CreateObjectContract(Type objectType)
+	{
+		JsonObjectContract obj = ((DefaultContractResolver)this).CreateObjectContract(objectType);
+		obj.ItemRequired = (Required)1;
+		return obj;
+	}
+}

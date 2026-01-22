@@ -1,0 +1,3 @@
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net40/GameLogicAssembly.GeneratedMSBuildEditorConfig.editorconfig
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net40/GameLogicAssembly.csproj.CoreCompileInputs.cache
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net40/GameLogicAssembly.sourcelink.json

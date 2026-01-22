@@ -1,0 +1,8 @@
+README.md
+polyterra_env.py
+setup.py
+polyterra_env.egg-info/PKG-INFO
+polyterra_env.egg-info/SOURCES.txt
+polyterra_env.egg-info/dependency_links.txt
+polyterra_env.egg-info/requires.txt
+polyterra_env.egg-info/top_level.txt

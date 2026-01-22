@@ -1,0 +1,15 @@
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogicAssembly.csproj.AssemblyReference.cache
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogicAssembly.GeneratedMSBuildEditorConfig.editorconfig
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogicAssembly.csproj.CoreCompileInputs.cache
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogicAssembly.sourcelink.json
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/bin/Debug/net8.0/PolytopiaBackendBase.staticwebassets.endpoints.json
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/bin/Debug/net8.0/GameLogicAssembly.deps.json
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/bin/Debug/net8.0/GameLogicAssembly.dll
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/bin/Debug/net8.0/GameLogicAssembly.pdb
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/bin/Debug/net8.0/PolytopiaBackendBase.dll
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/bin/Debug/net8.0/PolytopiaBackendBase.pdb
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogi.D826B45F.Up2Date
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogicAssembly.dll
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/refint/GameLogicAssembly.dll
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/GameLogicAssembly.pdb
+/Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/obj/Debug/net8.0/ref/GameLogicAssembly.dll

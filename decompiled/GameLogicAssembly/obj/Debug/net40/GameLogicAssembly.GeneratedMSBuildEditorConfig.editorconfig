@@ -1,0 +1,8 @@
+is_global = true
+build_property.RootNamespace = GameLogicAssembly
+build_property.ProjectDir = /Users/raphael/Documents/GitHub/polyterra-env/decompiled/GameLogicAssembly/
+build_property.EnableComHosting = 
+build_property.EnableGeneratedComInterfaceComImportInterop = 
+build_property.CsWinRTUseWindowsUIXamlProjections = false
+build_property.EffectiveAnalysisLevelStyle = 
+build_property.EnableCodeStyleSeverity = 

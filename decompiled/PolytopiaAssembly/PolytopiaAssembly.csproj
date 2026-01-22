@@ -1,0 +1,62 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PolytopiaAssembly</AssemblyName>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <TargetFramework>net40</TargetFramework>
+  </PropertyGroup>
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup />
+  <ItemGroup />
+  <ItemGroup>
+    <Reference Include="UnityEngine.CoreModule" />
+    <Reference Include="UnityEngine.UnityWebRequestWWWModule" />
+    <Reference Include="UnityEngine.AssetBundleModule" />
+    <Reference Include="Facepunch.Steamworks.Posix" />
+    <Reference Include="UnityEngine.UI" />
+    <Reference Include="UnityEngine.UnityWebRequestTextureModule" />
+    <Reference Include="UnityEngine.UnityWebRequestModule" />
+    <Reference Include="UnityEngine.InputLegacyModule" />
+    <Reference Include="GameLogicAssembly">
+      <HintPath>../../lib/GameLogicAssembly.dll</HintPath>
+    </Reference>
+    <Reference Include="DOTween" />
+    <Reference Include="PolytopiaBackendBase">
+      <HintPath>../../lib/PolytopiaBackendBase.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AudioModule" />
+    <Reference Include="UnityEngine.Purchasing" />
+    <Reference Include="NaughtyAttributes.Core" />
+    <Reference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <Reference Include="UnityEngine.IMGUIModule" />
+    <Reference Include="DebugLogger" />
+    <Reference Include="Unity.TextMeshPro" />
+    <Reference Include="IchiGamepad" />
+    <Reference Include="UnityEngine.UIModule" />
+    <Reference Include="Newtonsoft.Json" />
+    <Reference Include="UnityEngine.GameCenterModule" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="DebugOverlay" />
+    <Reference Include="Unity.ResourceManager" />
+    <Reference Include="UnityEngine.TextRenderingModule" />
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime" />
+    <Reference Include="UnityEngine.ParticleSystemModule" />
+    <Reference Include="System.Core">
+      <HintPath>../../../../../usr/local/share/dotnet/shared/Microsoft.NETCore.App/8.0.23/System.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule" />
+    <Reference Include="UnityEngine.PhysicsModule" />
+    <Reference Include="UnityEngine.Physics2DModule" />
+    <Reference Include="I2Localization" />
+    <Reference Include="UnityEngine.UnityAnalyticsModule" />
+    <Reference Include="UnityEngine.PerformanceReportingModule" />
+    <Reference Include="UnityEngine.CrashReportingModule" />
+    <Reference Include="Unity.Addressables" />
+    <Reference Include="UnityEngine.ImageConversionModule" />
+    <Reference Include="K4os.Compression.LZ4" />
+    <Reference Include="UDP" />
+  </ItemGroup>
+</Project>
