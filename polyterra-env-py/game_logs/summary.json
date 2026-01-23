@@ -1,0 +1,40 @@
+{
+  "num_episodes": 5,
+  "episodes": [
+    {
+      "episode": 0,
+      "seed": 42,
+      "turns": 99,
+      "reward": 0,
+      "states_saved": 10
+    },
+    {
+      "episode": 1,
+      "seed": 43,
+      "turns": 99,
+      "reward": 0,
+      "states_saved": 10
+    },
+    {
+      "episode": 2,
+      "seed": 44,
+      "turns": 99,
+      "reward": 0,
+      "states_saved": 10
+    },
+    {
+      "episode": 3,
+      "seed": 45,
+      "turns": 99,
+      "reward": 0,
+      "states_saved": 10
+    },
+    {
+      "episode": 4,
+      "seed": 46,
+      "turns": 99,
+      "reward": 0,
+      "states_saved": 10
+    }
+  ]
+}
