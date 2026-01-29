@@ -11,6 +11,7 @@
       "priceTier": "Tier0",
       "startingUnit": "warrior",
       "startingTech": [
+        "basic",
         "hunting"
       ],
       "startingResource": [
@@ -34,6 +35,7 @@
       "priceTier": "Tier0",
       "startingUnit": "warrior",
       "startingTech": [
+        "basic",
         "hunting"
       ],
       "startingResource": [
@@ -57,6 +59,7 @@
       "priceTier": "Tier0",
       "startingUnit": "warrior",
       "startingTech": [
+        "basic",
         "organization"
       ],
       "startingResource": [
@@ -80,6 +83,7 @@
       "priceTier": "Tier0",
       "startingUnit": "rider",
       "startingTech": [
+        "basic",
         "riding"
       ],
       "startingResource": [
@@ -103,6 +107,7 @@
       "priceTier": "Tier0",
       "startingUnit": "warrior",
       "startingTech": [
+        "basic",
         "climbing"
       ],
       "startingResource": [
@@ -120,7 +125,7 @@
     "scout": {
       "idx": 1,
       "hidden": false,
-      "cost": 0,
+      "cost": 2,
       "health": 10,
       "defence": 1,
       "movement": 2,
@@ -418,10 +423,10 @@
     },
     "riding": {
       "idx": 1,
-      "cost": 5,
+      "cost": 1,
       "techUnlocks": [
-        "freespirit",
-        "roads"
+        "roads",
+        "freespirit"
       ],
       "improvementUnlocks": [],
       "unitUnlocks": [
@@ -434,7 +439,7 @@
     },
     "freespirit": {
       "idx": 2,
-      "cost": 7,
+      "cost": 2,
       "techUnlocks": [
         "chivalry"
       ],
@@ -447,7 +452,7 @@
     },
     "chivalry": {
       "idx": 3,
-      "cost": 8,
+      "cost": 3,
       "techUnlocks": [],
       "improvementUnlocks": [],
       "unitUnlocks": [
@@ -460,8 +465,10 @@
     },
     "roads": {
       "idx": 4,
-      "cost": 0,
-      "techUnlocks": [],
+      "cost": 2,
+      "techUnlocks": [
+        "trade"
+      ],
       "unitUnlocks": [],
       "improvementUnlocks": [],
       "abilityUnlocks": [],
@@ -471,7 +478,7 @@
     },
     "trade": {
       "idx": 5,
-      "cost": 10,
+      "cost": 3,
       "techUnlocks": [],
       "improvementUnlocks": [
         "customshouse"
@@ -484,7 +491,7 @@
     },
     "organization": {
       "idx": 6,
-      "cost": 5,
+      "cost": 1,
       "techUnlocks": [
         "farming",
         "shields"
@@ -500,9 +507,9 @@
     },
     "shields": {
       "idx": 7,
-      "cost": 5,
+      "cost": 2,
       "techUnlocks": [
-        "mathematics"
+        "diplomacy"
       ],
       "improvementUnlocks": [],
       "unitUnlocks": [
@@ -517,7 +524,7 @@
     },
     "farming": {
       "idx": 8,
-      "cost": 5,
+      "cost": 2,
       "techUnlocks": [
         "construction"
       ],
@@ -533,10 +540,8 @@
     },
     "construction": {
       "idx": 9,
-      "cost": 7,
-      "techUnlocks": [
-        "mathematics"
-      ],
+      "cost": 3,
+      "techUnlocks": [],
       "improvementUnlocks": [
         "lumberhut"
       ],
@@ -548,10 +553,10 @@
     },
     "fishing": {
       "idx": 10,
-      "cost": 5,
+      "cost": 1,
       "techUnlocks": [
         "sailing",
-        "whaling"
+        "freediving"
       ],
       "improvementUnlocks": [
         "fishing",
@@ -565,7 +570,7 @@
     },
     "whaling": {
       "idx": 11,
-      "cost": 6,
+      "cost": 0,
       "techUnlocks": [],
       "improvementUnlocks": [],
       "unitUnlocks": [],
@@ -576,7 +581,7 @@
     },
     "aquatism": {
       "idx": 12,
-      "cost": 0,
+      "cost": 3,
       "techUnlocks": [],
       "unitUnlocks": [],
       "improvementUnlocks": [],
@@ -587,7 +592,7 @@
     },
     "sailing": {
       "idx": 13,
-      "cost": 5,
+      "cost": 2,
       "techUnlocks": [
         "navigation"
       ],
@@ -604,7 +609,7 @@
     },
     "navigation": {
       "idx": 14,
-      "cost": 12,
+      "cost": 3,
       "techUnlocks": [],
       "improvementUnlocks": [],
       "unitUnlocks": [
@@ -619,7 +624,7 @@
     },
     "hunting": {
       "idx": 15,
-      "cost": 5,
+      "cost": 1,
       "techUnlocks": [
         "archery",
         "forestry"
@@ -635,8 +640,10 @@
     },
     "forestry": {
       "idx": 16,
-      "cost": 6,
-      "techUnlocks": [],
+      "cost": 2,
+      "techUnlocks": [
+        "mathematics"
+      ],
       "improvementUnlocks": [
         "sawmill"
       ],
@@ -648,10 +655,8 @@
     },
     "mathematics": {
       "idx": 17,
-      "cost": 7,
-      "techUnlocks": [
-        "philosophy"
-      ],
+      "cost": 3,
+      "techUnlocks": [],
       "improvementUnlocks": [],
       "unitUnlocks": [
         "catapult"
@@ -663,7 +668,7 @@
     },
     "archery": {
       "idx": 18,
-      "cost": 5,
+      "cost": 2,
       "techUnlocks": [
         "spiritualism"
       ],
@@ -678,7 +683,7 @@
     },
     "spiritualism": {
       "idx": 19,
-      "cost": 6,
+      "cost": 3,
       "techUnlocks": [],
       "improvementUnlocks": [],
       "unitUnlocks": [],
@@ -689,9 +694,10 @@
     },
     "climbing": {
       "idx": 20,
-      "cost": 5,
+      "cost": 1,
       "techUnlocks": [
-        "mining"
+        "mining",
+        "meditation"
       ],
       "improvementUnlocks": [
         "mine"
@@ -706,8 +712,10 @@
     },
     "meditation": {
       "idx": 21,
-      "cost": 0,
-      "techUnlocks": [],
+      "cost": 2,
+      "techUnlocks": [
+        "philosophy"
+      ],
       "unitUnlocks": [],
       "improvementUnlocks": [],
       "abilityUnlocks": [],
@@ -717,7 +725,7 @@
     },
     "philosophy": {
       "idx": 22,
-      "cost": 7,
+      "cost": 3,
       "techUnlocks": [],
       "improvementUnlocks": [
         "temple"
@@ -732,7 +740,7 @@
     },
     "mining": {
       "idx": 23,
-      "cost": 5,
+      "cost": 2,
       "techUnlocks": [
         "smithery"
       ],
@@ -747,16 +755,38 @@
     },
     "smithery": {
       "idx": 24,
-      "cost": 5,
-      "techUnlocks": [
-        "philosophy"
-      ],
+      "cost": 3,
+      "techUnlocks": [],
       "improvementUnlocks": [
         "forge"
       ],
       "unitUnlocks": [
         "swordsman"
       ],
+      "abilityUnlocks": [],
+      "taskUnlocks": [],
+      "movementUnlocks": {},
+      "defenceBonusUnlocks": {}
+    },
+    "diplomacy": {
+      "idx": 27,
+      "cost": 3,
+      "techUnlocks": [],
+      "improvementUnlocks": [],
+      "unitUnlocks": [],
+      "abilityUnlocks": [],
+      "taskUnlocks": [],
+      "movementUnlocks": {},
+      "defenceBonusUnlocks": {}
+    },
+    "freediving": {
+      "idx": 26,
+      "cost": 2,
+      "techUnlocks": [
+        "aquatism"
+      ],
+      "improvementUnlocks": [],
+      "unitUnlocks": [],
       "abilityUnlocks": [],
       "taskUnlocks": [],
       "movementUnlocks": {},

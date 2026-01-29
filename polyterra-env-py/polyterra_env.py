@@ -146,13 +146,13 @@ class PolyterraEnv(AECEnv):
         max_units = 100  # Reasonable upper bound
         max_cities = 50  # Reasonable upper bound
 
-        return spaces.Dict({
+        obs_space = {
             # ===== GLOBAL STATE =====
             "turn": spaces.Box(0, self.max_turns, shape=(), dtype=np.int32),
             "current_player_idx": spaces.Discrete(self.num_players),
 
             # ===== PLAYER STATE (current agent) =====
-            "player_id": spaces.Discrete(self.num_players),
+            "player_id": spaces.Discrete(self.num_players + 1),  # 1-indexed player IDs
             "currency": spaces.Box(0, 100000, shape=(), dtype=np.int32),
             "score": spaces.Box(0, 10000000, shape=(), dtype=np.int32),
             "tribe": spaces.Discrete(self.NUM_TRIBES),
@@ -185,7 +185,7 @@ class PolyterraEnv(AECEnv):
                     # Unit details (if present)
                     "has_unit": spaces.Discrete(2),
                     "unit_type": spaces.Discrete(self.NUM_UNITS),
-                    "unit_owner": spaces.Discrete(self.num_players + 1),
+                    "unit_owner": spaces.Discrete(self.num_players + 2),  # +1 neutral, +1 unknown
                     "unit_health": spaces.Box(0, 100, shape=(), dtype=np.float32),
                     "unit_promotion": spaces.Discrete(4),
                     "unit_moved": spaces.Discrete(2),
@@ -198,7 +198,7 @@ class PolyterraEnv(AECEnv):
                 spaces.Dict({
                     "id": spaces.Box(0, 100000, shape=(), dtype=np.int32),
                     "type": spaces.Discrete(self.NUM_UNITS),
-                    "owner": spaces.Discrete(self.num_players),
+                    "owner": spaces.Discrete(self.num_players + 1),  # 1-indexed player IDs
                     "x": spaces.Discrete(50),
                     "y": spaces.Discrete(50),
                     "health": spaces.Box(0, 100, shape=(), dtype=np.float32),
@@ -214,7 +214,7 @@ class PolyterraEnv(AECEnv):
                 spaces.Dict({
                     "x": spaces.Discrete(50),
                     "y": spaces.Discrete(50),
-                    "owner": spaces.Discrete(self.num_players),
+                    "owner": spaces.Discrete(self.num_players + 1),  # 1-indexed player IDs
                     "level": spaces.Box(0, 20, shape=(), dtype=np.int32),
                     "population": spaces.Box(0, 100, shape=(), dtype=np.int32),
                     "production": spaces.Box(0, 100, shape=(), dtype=np.int32),
@@ -225,17 +225,27 @@ class PolyterraEnv(AECEnv):
             # ===== OPPONENT INFO (partial observability) =====
             "opponents": spaces.Sequence(
                 spaces.Dict({
-                    "id": spaces.Discrete(self.num_players),
+                    "id": spaces.Discrete(self.num_players + 1),  # 1-indexed player IDs
                     "tribe": spaces.Discrete(self.NUM_TRIBES),
                     "score": spaces.Box(0, 10000000, shape=(), dtype=np.int32),
                     "num_cities": spaces.Box(0, 100, shape=(), dtype=np.int32),
                     "is_alive": spaces.Discrete(2),
                 })
             ),
+        }
 
-            # ===== ACTION MASK (if enabled) =====
-            "action_mask": spaces.MultiBinary(10000) if self.use_action_masking else spaces.MultiBinary(1),
-        })
+        # Only include action mask if enabled
+        if self.use_action_masking:
+            obs_space["action_mask"] = spaces.Tuple((
+                spaces.MultiBinary(self.NUM_COMMAND_TYPES),  # action_type
+                spaces.MultiBinary(50),  # target_x
+                spaces.MultiBinary(50),  # target_y
+                spaces.MultiBinary(100),  # unit_id_idx
+                spaces.MultiBinary(max(self.NUM_UNITS, self.NUM_IMPROVEMENTS, self.NUM_TECHS)),  # param1
+                spaces.MultiBinary(10),  # param2
+            ))
+
+        return spaces.Dict(obs_space)
 
     @functools.lru_cache(maxsize=None)
     def action_space(self, agent):
@@ -418,9 +428,6 @@ class PolyterraEnv(AECEnv):
                     "is_alive": 1,  # Assume alive
                 })
 
-        # Action mask (compute valid actions)
-        action_mask = self._compute_action_mask(raw_obs) if self.use_action_masking else np.array([1])
-
         # Construct structured observation
         obs = {
             "turn": raw_obs.get("turn", 0),
@@ -437,19 +444,61 @@ class PolyterraEnv(AECEnv):
             "units": units,
             "cities": cities,
             "opponents": opponents,
-            "action_mask": action_mask,
         }
+
+        # Only include action mask if enabled
+        if self.use_action_masking:
+            obs["action_mask"] = self._compute_action_mask(raw_obs)
 
         return obs
 
-    def _compute_action_mask(self, raw_obs: dict) -> np.ndarray:
+    def _compute_action_mask(self, raw_obs: dict) -> tuple:
         """
-        Compute valid action mask based on game state
+        Compute valid action mask based on game state using C# backend valid_actions
 
-        For now, returns a simple mask. TODO: Implement full validity checking.
+        Returns:
+            Tuple of masks for each action dimension matching MultiDiscrete nvec
         """
-        # Placeholder: allow all actions
-        mask = np.ones(10000, dtype=np.int8)
+        # Get valid actions from C# backend
+        valid_actions = raw_obs.get('valid_actions', {})
+
+        # Initialize masks - all zeros (invalid) by default for action_type
+        # MultiDiscrete nvec = [NUM_COMMAND_TYPES, 50, 50, 100, max(units/improvements/techs), 10]
+        action_type_mask = np.zeros(self.NUM_COMMAND_TYPES, dtype=np.int8)
+        target_x_mask = np.ones(50, dtype=np.int8)  # Allow all coordinates by default
+        target_y_mask = np.ones(50, dtype=np.int8)
+        unit_idx_mask = np.ones(100, dtype=np.int8)
+        param1_mask = np.ones(max(self.NUM_UNITS, self.NUM_IMPROVEMENTS, self.NUM_TECHS), dtype=np.int8)
+        param2_mask = np.ones(10, dtype=np.int8)
+
+        # Enable END_TURN if valid
+        if valid_actions.get('can_end_turn', False):
+            action_type_mask[0] = 1  # END_TURN is action type 0
+
+        # Enable MOVE if there are valid moves
+        if len(valid_actions.get('valid_moves', [])) > 0:
+            action_type_mask[1] = 1  # MOVE is action type 1
+
+        # Enable ATTACK if there are valid attacks
+        if len(valid_actions.get('valid_attacks', [])) > 0:
+            action_type_mask[2] = 1  # ATTACK is action type 2
+
+        # Enable RESEARCH if there are valid techs
+        if len(valid_actions.get('valid_research', [])) > 0:
+            action_type_mask[5] = 1  # RESEARCH is action type 5
+
+        # If no actions are valid, allow END_TURN as fallback
+        if np.sum(action_type_mask) == 0:
+            action_type_mask[0] = 1
+
+        mask = (
+            action_type_mask,
+            target_x_mask,
+            target_y_mask,
+            unit_idx_mask,
+            param1_mask,
+            param2_mask,
+        )
         return mask
 
     def step(self, action: np.ndarray):
@@ -459,11 +508,15 @@ class PolyterraEnv(AECEnv):
         Args:
             action: MultiDiscrete action array [action_type, target_x, target_y, unit_idx, param1, param2]
         """
-        if (
-            self.terminations[self.agent_selection]
-            or self.truncations[self.agent_selection]
-        ):
-            return self._was_dead_step(action)
+        # Handle already-terminated agents (or agents not in active list)
+        agent = self.agent_selection
+        if agent not in self.agents or self.terminations.get(agent, False) or self.truncations.get(agent, False):
+            # Agent is dead - just advance to next agent without doing anything
+            self._clear_rewards()
+            # Find next live agent
+            if self.agents:
+                self.agent_selection = self.agents[0]
+            return
 
         agent = self.agent_selection
 
@@ -481,10 +534,16 @@ class PolyterraEnv(AECEnv):
         response = self._send_command(command)
 
         if not response.get("success"):
-            # Invalid action - penalize
-            self.rewards[agent] = -10.0
-            self.terminations[agent] = True
-            self.infos[agent] = {"error": response.get("error")}
+            # Invalid action - penalize but DON'T terminate agent
+            # Terminating on invalid action would end episode too quickly during training
+            self._clear_rewards()
+            self.rewards[agent] = -1.0  # Small negative reward for invalid action
+            self.infos[agent] = {"error": response.get("error"), "invalid_action": True}
+            # The agent still has the turn - they need to pick a valid action or END_TURN
+            # Don't change agent_selection - let them try again
+            return
+
+        # Action succeeded - update state
         else:
             # Update state from response
             self.agents = response["agents"]
@@ -494,30 +553,28 @@ class PolyterraEnv(AECEnv):
                 for ag in self.agents
             }
 
-            # Update rewards
+            # Update rewards - only for current agent
             new_rewards = response["rewards"]
-            for ag in self.agents:
-                reward_delta = new_rewards[ag] - self._cumulative_rewards.get(ag, 0)
-                self.rewards[ag] = reward_delta
-                self._cumulative_rewards[ag] = new_rewards[ag]
+            reward_delta = new_rewards[agent] - self._cumulative_rewards.get(agent, 0)
+            self._cumulative_rewards[agent] = new_rewards[agent]
+
+            # Set reward for current agent only
+            self._clear_rewards()  # Clear all first
+            self.rewards[agent] = reward_delta  # Set current agent's reward
 
             # Update terminations and truncations
             self.terminations = response["terminations"]
             self.truncations = response["truncations"]
 
-            # Update agent selection
+            # Update agent selection from C# backend
             self.agent_selection = response["agent_selection"]
 
             # Update info
             for ag in self.agents:
                 self.infos[ag] = response.get("info", {})
 
-        # Clear reward for next agent
-        self._clear_rewards()
-
-        # Select next agent if current is done
-        if self.agent_selection not in self.agents:
-            self.agent_selection = self._agent_selector.next()
+        # Note: We trust the C# backend's agent_selection completely.
+        # Do NOT use _agent_selector here as it will cause double advancement.
 
     def _action_to_command(self, action_type: int, target_x: int, target_y: int,
                            unit_idx: int, param1: int, param2: int) -> dict:
@@ -579,8 +636,8 @@ class PolyterraEnv(AECEnv):
                 "action_type": "attack",
                 "action_params": {
                     "unit_id": unit_id,
-                    "origin_x": unit.get("x"),
-                    "origin_y": unit.get("y"),
+                    "from_x": unit.get("x"),
+                    "from_y": unit.get("y"),
                     "target_x": target_x,
                     "target_y": target_y,
                 }
@@ -611,8 +668,8 @@ class PolyterraEnv(AECEnv):
                 "action_type": "train",
                 "action_params": {
                     "unit_type": unit_type_name,
-                    "x": target_x,
-                    "y": target_y,
+                    "city_x": target_x,
+                    "city_y": target_y,
                 }
             }
 

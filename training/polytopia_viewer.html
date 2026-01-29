@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Polytopia Replay Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Arial', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+            display: flex;
+            gap: 20px;
+        }
+        .main { flex: 1; }
+        .sidebar { width: 320px; }
+        .panel {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        h1 { font-size: 1.8rem; margin-bottom: 15px; color: #4ecdc4; }
+        h2 { font-size: 1.3rem; margin-bottom: 12px; color: #f39c12; }
+        .file-input { display: none; }
+        .file-label {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #27ae60;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .file-label:hover { background: #229954; transform: translateY(-2px); }
+
+        /* Map Canvas */
+        #mapCanvas {
+            display: block;
+            background: #0f3460;
+            border: 3px solid #444;
+            border-radius: 8px;
+            cursor: crosshair;
+            image-rendering: pixelated;
+        }
+
+        /* Stats */
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            background: rgba(255,255,255,0.05);
+            margin: 4px 0;
+            border-radius: 4px;
+        }
+        .stat-label { font-weight: bold; color: #aaa; }
+        .stat-value { color: #4ecdc4; font-weight: bold; }
+
+        /* Controls */
+        .controls { display: flex; gap: 8px; margin-top: 12px; }
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 14px;
+        }
+        button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.4); }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-prev { background: #e67e22; color: white; }
+        .btn-next { background: #27ae60; color: white; }
+        .btn-nav { background: #3498db; color: white; }
+
+        /* Agent badge */
+        .agent-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin: 8px 0;
+        }
+        .player_0 { background: #e74c3c; }
+        .player_1 { background: #3498db; }
+
+        /* Action */
+        .action-box {
+            background: rgba(46, 204, 113, 0.1);
+            border-left: 4px solid #2ecc71;
+            padding: 12px;
+            margin: 12px 0;
+            border-radius: 4px;
+        }
+        .action-type { font-size: 1.2rem; font-weight: bold; color: #2ecc71; margin-bottom: 4px; }
+        .action-detail { color: #95a5a6; font-size: 0.9rem; }
+
+        /* Tooltip */
+        #tooltip {
+            position: fixed;
+            background: rgba(0,0,0,0.95);
+            color: white;
+            padding: 12px;
+            border-radius: 6px;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+            border: 2px solid #4ecdc4;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        /* Legend */
+        .legend-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+        }
+        .legend-color {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            border: 1px solid #666;
+        }
+
+        .status { margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="main">
+        <div class="panel">
+            <h1>🗺️ Polytopia Replay Viewer</h1>
+            <input type="file" id="fileInput" class="file-input" accept=".json">
+            <label for="fileInput" class="file-label">📁 Load Replay</label>
+            <span id="fileName" style="margin-left: 12px; color: #95a5a6;"></span>
+        </div>
+
+        <div class="panel">
+            <canvas id="mapCanvas" width="640" height="640"></canvas>
+            <div class="status" id="hoverInfo">Hover over tiles for info</div>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <div class="panel">
+            <h2>Game State</h2>
+            <div class="stat-row">
+                <span class="stat-label">Step</span>
+                <span class="stat-value"><span id="currentStep">0</span> / <span id="totalSteps">0</span></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Turn</span>
+                <span class="stat-value" id="statTurn">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Agent</span>
+                <span id="agentBadge" class="agent-badge">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Currency</span>
+                <span class="stat-value" id="statCurrency">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Score</span>
+                <span class="stat-value" id="statScore">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Units</span>
+                <span class="stat-value" id="statUnits">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Cities</span>
+                <span class="stat-value" id="statCities">0</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Action</h2>
+            <div class="action-box">
+                <div class="action-type" id="actionType">-</div>
+                <div class="action-detail" id="actionDetails">No action yet</div>
+                <div id="rewardDisplay" style="margin-top: 8px; font-weight: bold;"></div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Controls</h2>
+            <div class="controls">
+                <button class="btn-prev" id="btnPrev">⬅️ Prev</button>
+                <button class="btn-next" id="btnNext">Next ➡️</button>
+            </div>
+            <div class="controls">
+                <button class="btn-nav" id="btnFirst">⏮️ First</button>
+                <button class="btn-nav" id="btnLast">Last ⏭️</button>
+            </div>
+            <div style="margin-top: 12px; font-size: 0.85rem; color: #95a5a6; text-align: center;">
+                Use arrow keys: ← →
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Legend</h2>
+            <div class="legend-grid">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #27ae60;"></div>
+                    <span>Field</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #229954;"></div>
+                    <span>Forest</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #7f8c8d;"></div>
+                    <span>Mountain</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #3498db;"></div>
+                    <span>Water</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #2980b9;"></div>
+                    <span>Ocean</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #1a1a1a;"></div>
+                    <span>Fog</span>
+                </div>
+            </div>
+            <div style="margin-top: 12px; font-size: 0.85rem; color: #95a5a6;">
+                <div>🔴 Red border = Player 1</div>
+                <div>🔵 Blue border = Player 2</div>
+                <div>⚔️ Unit icons on tiles</div>
+                <div>⭐ Capital cities</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltip"></div>
+
+    <script>
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const TERRAIN_COLORS = ['#1a1a1a', '#3498db', '#2980b9', '#27ae60', '#7f8c8d', '#229954', '#d4f1f4'];
+        const TERRAIN_NAMES = ['None', 'Water', 'Ocean', 'Field', 'Mountain', 'Forest', 'Ice'];
+        const PLAYER_COLORS = ['#95a5a6', '#e74c3c', '#3498db', '#f39c12', '#2ecc71'];
+        // Unit indices: 0=none, 1=scout, 2=warrior, 3=rider, 4=archer, 5=defender, 6=swordsman...
+        const UNIT_SYMBOLS = ['?', 'S', 'W', 'R', 'A', 'D', 'Sw', 'C', 'K', 'M', 'Sh', 'B', '?', 'Bo', 'G'];
+
+        let replayData = null;
+        let currentStepIndex = 0;
+        let mapSize = 16;
+        let tileSize = 40;
+        let hoveredTile = null;
+
+        document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+        document.getElementById('btnFirst').addEventListener('click', () => goToStep(0));
+        document.getElementById('btnPrev').addEventListener('click', () => goToStep(currentStepIndex - 1));
+        document.getElementById('btnNext').addEventListener('click', () => goToStep(currentStepIndex + 1));
+        document.getElementById('btnLast').addEventListener('click', () => goToStep(replayData.steps.length - 1));
+
+        canvas.addEventListener('mousemove', handleMouseMove);
+        canvas.addEventListener('mouseleave', () => {
+            document.getElementById('tooltip').style.display = 'none';
+            hoveredTile = null;
+            renderMap();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (!replayData) return;
+            if (e.key === 'ArrowLeft') goToStep(currentStepIndex - 1);
+            if (e.key === 'ArrowRight') goToStep(currentStepIndex + 1);
+        });
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    replayData = JSON.parse(e.target.result);
+                    document.getElementById('fileName').textContent = file.name;
+                    loadReplay();
+                } catch (err) {
+                    alert('Error: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function loadReplay() {
+            if (!replayData || !replayData.steps.length) return;
+
+            // Detect map size
+            const tiles = replayData.steps[0].observation.tiles;
+            if (tiles && tiles.length) {
+                mapSize = Math.max(...tiles.map(t => Math.max(t.x, t.y))) + 1;
+            }
+
+            tileSize = Math.floor(640 / mapSize);
+            canvas.width = tileSize * mapSize;
+            canvas.height = tileSize * mapSize;
+
+            console.log(`Loaded replay: ${replayData.steps.length} steps, mapSize=${mapSize}, tileSize=${tileSize}`);
+            console.log(`Canvas size: ${canvas.width}x${canvas.height}`);
+
+            document.getElementById('totalSteps').textContent = replayData.steps.length;
+            goToStep(0);
+        }
+
+        function goToStep(index) {
+            if (!replayData) return;
+            if (index < 0 || index >= replayData.steps.length) return;
+
+            currentStepIndex = index;
+            const step = replayData.steps[index];
+            const obs = step.observation;
+
+            // Update UI
+            document.getElementById('currentStep').textContent = index + 1;
+            document.getElementById('statTurn').textContent = obs.turn;
+            document.getElementById('statCurrency').textContent = obs.currency;
+            document.getElementById('statScore').textContent = obs.score.toLocaleString();
+            document.getElementById('statUnits').textContent = obs.num_units;
+            document.getElementById('statCities').textContent = obs.num_cities;
+
+            const badge = document.getElementById('agentBadge');
+            badge.textContent = step.agent;
+            badge.className = `agent-badge ${step.agent}`;
+
+            document.getElementById('actionType').textContent = step.action.type;
+            let details = [];
+            if (step.action.target) details.push(`Target: (${step.action.target[0]}, ${step.action.target[1]})`);
+            if (step.action.unit_idx != null) details.push(`Unit #${step.action.unit_idx}`);
+            document.getElementById('actionDetails').textContent = details.join(' | ') || 'No parameters';
+
+            const rewardDiv = document.getElementById('rewardDisplay');
+            if (step.reward !== 0) {
+                rewardDiv.textContent = `Reward: ${step.reward > 0 ? '+' : ''}${step.reward.toFixed(1)}`;
+                rewardDiv.style.color = step.reward > 0 ? '#2ecc71' : '#e74c3c';
+            } else {
+                rewardDiv.textContent = '';
+            }
+
+            // Update buttons
+            document.getElementById('btnFirst').disabled = index === 0;
+            document.getElementById('btnPrev').disabled = index === 0;
+            document.getElementById('btnNext').disabled = index === replayData.steps.length - 1;
+            document.getElementById('btnLast').disabled = index === replayData.steps.length - 1;
+
+            renderMap();
+        }
+
+        function renderMap() {
+            if (!replayData) return;
+
+            const step = replayData.steps[currentStepIndex];
+            const tiles = step.observation.tiles;
+
+            // Debug: count units in this step
+            const unitsInStep = tiles.filter(t => t.has_unit && t.explored);
+            console.log(`Step ${currentStepIndex}: ${unitsInStep.length} units visible`,
+                unitsInStep.map(u => `(${u.x},${u.y})`));
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Build tile map
+            const tileMap = {};
+            for (const tile of tiles) {
+                tileMap[`${tile.x},${tile.y}`] = tile;
+            }
+
+            // Render tiles
+            for (let y = 0; y < mapSize; y++) {
+                for (let x = 0; x < mapSize; x++) {
+                    const tile = tileMap[`${x},${y}`];
+                    renderTile(x, y, tile);
+                }
+            }
+
+            // Highlight hovered tile
+            if (hoveredTile) {
+                const [hx, hy] = hoveredTile;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(hx * tileSize, hy * tileSize, tileSize, tileSize);
+            }
+        }
+
+        function renderTile(x, y, tile) {
+            const px = x * tileSize;
+            const py = y * tileSize;
+
+            if (!tile) {
+                ctx.fillStyle = '#0a0a0a';
+                ctx.fillRect(px, py, tileSize, tileSize);
+                return;
+            }
+
+            // Terrain
+            ctx.fillStyle = TERRAIN_COLORS[tile.terrain] || '#1a1a1a';
+            if (!tile.explored) {
+                ctx.fillStyle = '#0a0a0a';
+            } else if (!tile.visible) {
+                ctx.fillStyle = darkenColor(TERRAIN_COLORS[tile.terrain] || '#1a1a1a');
+            }
+            ctx.fillRect(px, py, tileSize, tileSize);
+
+            // Owner border
+            if (tile.owner > 0 && tile.owner <= 4 && tile.explored) {
+                ctx.strokeStyle = PLAYER_COLORS[tile.owner];
+                ctx.lineWidth = 3;
+                ctx.strokeRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
+            }
+
+            // Unit
+            if (tile.has_unit && tile.explored) {
+                console.log(`Drawing unit at (${x},${y}): type=${tile.unit_type}, owner=${tile.unit_owner}`);
+
+                // Draw unit background circle
+                const centerX = px + tileSize/2;
+                const centerY = py + tileSize/2;
+                const radius = tileSize * 0.35;
+
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                ctx.fillStyle = PLAYER_COLORS[tile.unit_owner] || '#e74c3c';
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Unit symbol
+                ctx.font = `bold ${tileSize * 0.35}px Arial`;
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(UNIT_SYMBOLS[tile.unit_type] || '?', centerX, centerY);
+
+                // Health bar (max health is 10, not 100)
+                if (tile.unit_health > 0) {
+                    const barWidth = tileSize - 8;
+                    const barHeight = 4;
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(px + 4, py + tileSize - 8, barWidth, barHeight);
+                    ctx.fillStyle = '#2ecc71';
+                    ctx.fillRect(px + 4, py + tileSize - 8, barWidth * (tile.unit_health / 10), barHeight);
+                }
+            }
+
+            // Improvements - draw in top-left corner
+            if (tile.improvement_type > 0 && tile.explored) {
+                ctx.font = `bold ${tileSize * 0.25}px Arial`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+
+                if (tile.improvement_type === 1) {
+                    // City or Village
+                    if (tile.owner === 0) {
+                        // Neutral village - gray
+                        ctx.fillStyle = '#888';
+                        ctx.fillText('V', px + 2, py + 2);
+                    } else if (tile.is_capital) {
+                        // Capital - gold star
+                        ctx.fillStyle = '#f39c12';
+                        ctx.fillText('★', px + 2, py + 2);
+                    } else {
+                        // Player city - player color
+                        ctx.fillStyle = PLAYER_COLORS[tile.owner] || '#f1c40f';
+                        ctx.fillText('C', px + 2, py + 2);
+                    }
+                } else if (tile.improvement_type === 2) {
+                    // Ruin
+                    ctx.fillStyle = '#666';
+                    ctx.fillText('?', px + 2, py + 2);
+                } else if (tile.improvement_type === 5) {
+                    // Farm
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillText('F', px + 2, py + 2);
+                } else if (tile.improvement_type === 6) {
+                    // Windmill
+                    ctx.fillStyle = '#ddd';
+                    ctx.fillText('W', px + 2, py + 2);
+                } else {
+                    // Other improvement
+                    ctx.fillStyle = '#aaa';
+                    ctx.fillText('I', px + 2, py + 2);
+                }
+            }
+        }
+
+        function darkenColor(color) {
+            const r = parseInt(color.slice(1, 3), 16);
+            const g = parseInt(color.slice(3, 5), 16);
+            const b = parseInt(color.slice(5, 7), 16);
+            return `rgb(${r*0.4}, ${g*0.4}, ${b*0.4})`;
+        }
+
+        function handleMouseMove(event) {
+            if (!replayData) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mx = event.clientX - rect.left;
+            const my = event.clientY - rect.top;
+            const tx = Math.floor(mx / tileSize);
+            const ty = Math.floor(my / tileSize);
+
+            if (tx < 0 || tx >= mapSize || ty < 0 || ty >= mapSize) {
+                hoveredTile = null;
+                document.getElementById('tooltip').style.display = 'none';
+                return;
+            }
+
+            hoveredTile = [tx, ty];
+
+            const step = replayData.steps[currentStepIndex];
+            const tiles = step.observation.tiles;
+            const tile = tiles.find(t => t.x === tx && t.y === ty);
+
+            if (tile) {
+                showTooltip(event, tile);
+            }
+
+            renderMap();
+        }
+
+        function showTooltip(event, tile) {
+            const tooltip = document.getElementById('tooltip');
+            let html = `<strong>(${tile.x}, ${tile.y})</strong><br>`;
+            html += `Terrain: ${TERRAIN_NAMES[tile.terrain]}<br>`;
+
+            if (!tile.explored) {
+                html += `<em style="color: #95a5a6;">Unexplored (Fog of War)</em>`;
+            } else {
+                if (tile.owner > 0) html += `Owner: Player ${tile.owner}<br>`;
+                if (tile.has_unit) {
+                    html += `Unit: Player ${tile.unit_owner}<br>`;
+                    html += `Health: ${tile.unit_health.toFixed(0)}%<br>`;
+                }
+                if (tile.is_capital) html += `<strong style="color: #f39c12;">CAPITAL CITY</strong><br>`;
+                else if (tile.improvement_type > 0) html += `City<br>`;
+            }
+
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.pageX + 15) + 'px';
+            tooltip.style.top = (event.pageY + 15) + 'px';
+        }
+    </script>
+</body>
+</html>

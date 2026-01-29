@@ -35,3 +35,14 @@ Thumbs.db
 
 # Project specific
 *.log
+
+
+# game logs
+polyterra-env-py/game_logs/
+
+# Training artifacts
+*.zip
+training/polyterra_ppo.zip
+
+# Virtual environments
+.venv/
