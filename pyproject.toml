@@ -6,4 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pettingzoo>=1.25.0",
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
 ]

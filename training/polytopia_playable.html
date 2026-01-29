@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Polytopia - Playable</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Arial', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+            display: flex;
+            gap: 20px;
+        }
+        .main { flex: 1; }
+        .sidebar { width: 350px; }
+        .panel {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        h1 { font-size: 1.8rem; margin-bottom: 15px; color: #4ecdc4; }
+        h2 { font-size: 1.3rem; margin-bottom: 12px; color: #f39c12; }
+
+        /* Map Canvas */
+        #mapCanvas {
+            display: block;
+            background: #0f3460;
+            border: 3px solid #444;
+            border-radius: 8px;
+            cursor: pointer;
+            image-rendering: pixelated;
+        }
+
+        /* Stats */
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            background: rgba(255,255,255,0.05);
+            margin: 4px 0;
+            border-radius: 4px;
+        }
+        .stat-label { font-weight: bold; color: #aaa; }
+        .stat-value { color: #4ecdc4; font-weight: bold; }
+
+        /* Agent badge */
+        .agent-badge {
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+        .player_0 { background: #e74c3c; }
+        .player_1 { background: #3498db; }
+
+        /* Controls */
+        .controls { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+        button {
+            padding: 12px 16px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 14px;
+        }
+        button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.4); }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-primary { background: #27ae60; color: white; flex: 1; }
+        .btn-secondary { background: #3498db; color: white; }
+        .btn-action { background: #e67e22; color: white; }
+        .btn-danger { background: #e74c3c; color: white; }
+
+        /* Selection info */
+        .selection-box {
+            background: rgba(46, 204, 113, 0.1);
+            border-left: 4px solid #2ecc71;
+            padding: 12px;
+            margin: 12px 0;
+            border-radius: 4px;
+        }
+        .selection-title { font-size: 1.1rem; font-weight: bold; color: #2ecc71; margin-bottom: 8px; }
+
+        /* Valid actions list */
+        .action-list {
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.9rem;
+        }
+        .action-item {
+            padding: 6px 10px;
+            margin: 4px 0;
+            background: rgba(255,255,255,0.05);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .action-item:hover { background: rgba(255,255,255,0.15); }
+        .action-item.selected { background: rgba(46, 204, 113, 0.3); border: 1px solid #2ecc71; }
+
+        /* Tooltip */
+        #tooltip {
+            position: fixed;
+            background: rgba(0,0,0,0.95);
+            color: white;
+            padding: 12px;
+            border-radius: 6px;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+            border: 2px solid #4ecdc4;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        /* Game over overlay */
+        .overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+        .overlay-content {
+            background: #16213e;
+            padding: 40px;
+            border-radius: 16px;
+            text-align: center;
+        }
+        .overlay h2 { font-size: 2rem; margin-bottom: 20px; }
+
+        /* Status bar */
+        .status-bar {
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #95a5a6;
+        }
+
+        /* Connection status */
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #e74c3c;
+        }
+        .status-dot.connected { background: #2ecc71; }
+
+        /* Legend */
+        .legend-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+            font-size: 0.8rem;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-color {
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            border: 1px solid #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="main">
+        <div class="panel">
+            <h1>Polytopia - Playable Game</h1>
+            <div class="connection-status">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Disconnected</span>
+            </div>
+            <button class="btn-primary" id="btnNewGame" style="width: 200px;">New Game</button>
+        </div>
+
+        <div class="panel">
+            <canvas id="mapCanvas" width="640" height="640"></canvas>
+            <div class="status-bar" id="statusBar">Click "New Game" to start</div>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <div class="panel">
+            <h2>Current Turn</h2>
+            <div style="text-align: center; margin: 15px 0;">
+                <span id="agentBadge" class="agent-badge">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Turn</span>
+                <span class="stat-value" id="statTurn">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Currency</span>
+                <span class="stat-value" id="statCurrency">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Score</span>
+                <span class="stat-value" id="statScore">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Units</span>
+                <span class="stat-value" id="statUnits">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Cities</span>
+                <span class="stat-value" id="statCities">0</span>
+            </div>
+            <div class="controls">
+                <button class="btn-primary" id="btnEndTurn" disabled>End Turn</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Selected</h2>
+            <div class="selection-box" id="selectionBox">
+                <div class="selection-title" id="selectionTitle">No selection</div>
+                <div id="selectionDetails">Click on the map to select a tile or unit</div>
+            </div>
+            <div class="controls" id="unitActions" style="display: none;">
+                <button class="btn-action" id="btnMove">Move</button>
+                <button class="btn-danger" id="btnAttack">Attack</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Actions</h2>
+            <div class="action-list" id="actionList">
+                <div style="color: #666;">No actions available</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Legend</h2>
+            <div class="legend-grid">
+                <div class="legend-item"><div class="legend-color" style="background: #27ae60;"></div><span>Field</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: #229954;"></div><span>Forest</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: #7f8c8d;"></div><span>Mountain</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div><span>Water</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: #0a0a0a;"></div><span>Fog</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: #e74c3c;"></div><span>Player 1</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div><span>Player 2</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="overlay" id="gameOverOverlay">
+        <div class="overlay-content">
+            <h2 id="gameOverTitle">Game Over!</h2>
+            <p id="gameOverMessage" style="font-size: 1.2rem; margin-bottom: 20px;"></p>
+            <button class="btn-primary" onclick="startNewGame()">Play Again</button>
+        </div>
+    </div>
+
+    <div id="tooltip"></div>
+
+    <script>
+        const API_URL = 'http://localhost:5001/api';
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const TERRAIN_COLORS = ['#1a1a1a', '#3498db', '#2980b9', '#27ae60', '#7f8c8d', '#229954', '#d4f1f4'];
+        const TERRAIN_NAMES = ['None', 'Water', 'Ocean', 'Field', 'Mountain', 'Forest', 'Ice'];
+        const PLAYER_COLORS = ['#95a5a6', '#e74c3c', '#3498db', '#f39c12', '#2ecc71'];
+        const UNIT_SYMBOLS = ['?', 'S', 'W', 'R', 'A', 'D', 'Sw', 'C', 'K', 'M', 'Sh', 'B', '?', 'Bo', 'G'];
+        const UNIT_NAMES = ['None', 'Scout', 'Warrior', 'Rider', 'Archer', 'Defender', 'Swordsman', 'Catapult', 'Knight', 'Mind Bender', 'Ship', 'Battleship', '?', 'Boat', 'Giant'];
+
+        let gameState = null;
+        let validActions = {};
+        let mapSize = 16;
+        let tileSize = 40;
+        let selectedTile = null;
+        let selectedUnit = null;
+        let actionMode = null;  // 'move', 'attack', or null
+        let hoveredTile = null;
+
+        // Event listeners
+        document.getElementById('btnNewGame').addEventListener('click', startNewGame);
+        document.getElementById('btnEndTurn').addEventListener('click', endTurn);
+        document.getElementById('btnMove').addEventListener('click', () => setActionMode('move'));
+        document.getElementById('btnAttack').addEventListener('click', () => setActionMode('attack'));
+
+        canvas.addEventListener('click', handleCanvasClick);
+        canvas.addEventListener('mousemove', handleMouseMove);
+        canvas.addEventListener('mouseleave', () => {
+            document.getElementById('tooltip').style.display = 'none';
+            hoveredTile = null;
+            renderMap();
+        });
+
+        async function startNewGame() {
+            try {
+                const response = await fetch(`${API_URL}/reset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    setConnected(true);
+                    updateGameState(data);
+                    setStatus('Game started! ' + data.agent + "'s turn");
+                }
+            } catch (err) {
+                setConnected(false);
+                setStatus('Error: Could not connect to server. Run game_server.py first.');
+                console.error(err);
+            }
+        }
+
+        async function refreshState() {
+            try {
+                const response = await fetch(`${API_URL}/state`);
+                const data = await response.json();
+                updateGameState(data);
+            } catch (err) {
+                console.error('Failed to refresh state:', err);
+            }
+        }
+
+        async function endTurn() {
+            try {
+                const response = await fetch(`${API_URL}/end_turn`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                updateGameState(data);
+                clearSelection();
+                setStatus(data.agent + "'s turn");
+            } catch (err) {
+                console.error('Failed to end turn:', err);
+            }
+        }
+
+        async function executeAction(actionType, x, y, unitIdx, param1, param2) {
+            try {
+                const response = await fetch(`${API_URL}/action`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action_type: actionType,
+                        x: x,
+                        y: y,
+                        unit_idx: unitIdx,
+                        param1: param1 || 0,
+                        param2: param2 || 0
+                    })
+                });
+                const data = await response.json();
+
+                if (!data.success) {
+                    setStatus('Invalid action: ' + (data.info?.error || 'Unknown error'));
+                } else {
+                    setStatus('Action executed. Reward: ' + data.reward.toFixed(1));
+                }
+
+                updateGameState(data);
+                clearSelection();
+            } catch (err) {
+                console.error('Failed to execute action:', err);
+            }
+        }
+
+        function updateGameState(data) {
+            gameState = data;
+            validActions = data.valid_actions || {};
+
+            if (data.observation) {
+                const obs = data.observation;
+
+                // Detect map size
+                if (obs.tiles && obs.tiles.length) {
+                    mapSize = Math.max(...obs.tiles.map(t => Math.max(t.x, t.y))) + 1;
+                    tileSize = Math.floor(640 / mapSize);
+                    canvas.width = tileSize * mapSize;
+                    canvas.height = tileSize * mapSize;
+                }
+
+                // Update UI
+                document.getElementById('statTurn').textContent = obs.turn;
+                document.getElementById('statCurrency').textContent = obs.currency;
+                document.getElementById('statScore').textContent = obs.score.toLocaleString();
+                document.getElementById('statUnits').textContent = obs.num_units;
+                document.getElementById('statCities').textContent = obs.num_cities;
+            }
+
+            // Update agent badge
+            const badge = document.getElementById('agentBadge');
+            badge.textContent = data.agent || '-';
+            badge.className = `agent-badge ${data.agent || ''}`;
+
+            // Enable/disable buttons
+            document.getElementById('btnEndTurn').disabled = !data.agent;
+
+            // Update action list
+            updateActionList();
+
+            // Check game over
+            if (data.game_over) {
+                showGameOver(data.winner);
+            }
+
+            renderMap();
+        }
+
+        function updateActionList() {
+            const list = document.getElementById('actionList');
+            list.innerHTML = '';
+
+            // Research options
+            if (validActions.valid_research && validActions.valid_research.length > 0) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-weight: bold; color: #f39c12; margin: 8px 0 4px;';
+                header.textContent = 'Research (5 stars):';
+                list.appendChild(header);
+
+                for (const tech of validActions.valid_research) {
+                    const item = document.createElement('div');
+                    item.className = 'action-item';
+                    item.textContent = tech;
+                    item.onclick = () => doResearch(tech);
+                    list.appendChild(item);
+                }
+            }
+
+            // Train options (from cities)
+            if (validActions.valid_trains && validActions.valid_trains.length > 0) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-weight: bold; color: #27ae60; margin: 8px 0 4px;';
+                header.textContent = 'Train Units:';
+                list.appendChild(header);
+
+                for (const train of validActions.valid_trains) {
+                    const item = document.createElement('div');
+                    item.className = 'action-item';
+                    item.textContent = `${train.unit_type} at (${train.city_x}, ${train.city_y})`;
+                    item.onclick = () => doTrain(train);
+                    list.appendChild(item);
+                }
+            }
+
+            // Build options
+            if (validActions.valid_builds && validActions.valid_builds.length > 0) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-weight: bold; color: #3498db; margin: 8px 0 4px;';
+                header.textContent = 'Build:';
+                list.appendChild(header);
+
+                for (const build of validActions.valid_builds) {
+                    const item = document.createElement('div');
+                    item.className = 'action-item';
+                    item.textContent = `${build.improvement_type} at (${build.x}, ${build.y})`;
+                    item.onclick = () => doBuild(build);
+                    list.appendChild(item);
+                }
+            }
+
+            if (list.children.length === 0) {
+                list.innerHTML = '<div style="color: #666;">No special actions available</div>';
+            }
+        }
+
+        async function doResearch(techName) {
+            // Map tech name to index
+            const TECH_MAP = {
+                'climbing': 1, 'fishing': 2, 'hunting': 3, 'organization': 4,
+                'riding': 5, 'archery': 6, 'farming': 7, 'forestry': 8,
+                'free spirit': 9, 'meditation': 10, 'mining': 11, 'roads': 12,
+                'sailing': 13, 'shields': 14, 'whaling': 15, 'aquatism': 16,
+                'chivalry': 17, 'construction': 18, 'mathematics': 19, 'navigation': 20,
+                'philosophy': 21, 'smithery': 22, 'spiritualism': 23, 'trade': 24
+            };
+            const techIdx = TECH_MAP[techName.toLowerCase()] || 0;
+            await executeAction(5, 0, 0, 0, techIdx, 0);
+        }
+
+        async function doTrain(train) {
+            const UNIT_MAP = { 'Scout': 1, 'Warrior': 2, 'Rider': 3, 'Archer': 4, 'Defender': 5 };
+            const unitIdx = UNIT_MAP[train.unit_type] || 2;
+            await executeAction(4, train.city_x, train.city_y, 0, unitIdx, 0);
+        }
+
+        async function doBuild(build) {
+            const IMP_MAP = { 'Farm': 5, 'Mine': 6, 'Port': 7, 'Sawmill': 8, 'Windmill': 9, 'Forge': 10, 'Customs House': 11 };
+            const impIdx = IMP_MAP[build.improvement_type] || 5;
+            await executeAction(3, build.x, build.y, 0, impIdx, 0);
+        }
+
+        function handleCanvasClick(event) {
+            if (!gameState || !gameState.observation) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mx = event.clientX - rect.left;
+            const my = event.clientY - rect.top;
+            const tx = Math.floor(mx / tileSize);
+            const ty = Math.floor(my / tileSize);
+
+            const tiles = gameState.observation.tiles;
+            const tile = tiles.find(t => t.x === tx && t.y === ty);
+
+            if (!tile || !tile.explored) return;
+
+            // If in action mode, execute the action
+            if (actionMode && selectedUnit !== null) {
+                if (actionMode === 'move') {
+                    // Check if this is a valid move destination
+                    const validMoves = validActions.valid_moves || [];
+                    const move = validMoves.find(m => m.to_x === tx && m.to_y === ty && m.unit_id === selectedUnit.id);
+                    if (move) {
+                        const unitIdx = getUnitIndex(selectedUnit.id);
+                        executeAction(1, tx, ty, unitIdx, 0, 0);
+                    } else {
+                        setStatus('Invalid move destination');
+                    }
+                } else if (actionMode === 'attack') {
+                    const validAttacks = validActions.valid_attacks || [];
+                    const attack = validAttacks.find(a => a.target_x === tx && a.target_y === ty && a.unit_id === selectedUnit.id);
+                    if (attack) {
+                        const unitIdx = getUnitIndex(selectedUnit.id);
+                        executeAction(2, tx, ty, unitIdx, 0, 0);
+                    } else {
+                        setStatus('Invalid attack target');
+                    }
+                }
+                return;
+            }
+
+            // Select tile/unit
+            selectedTile = { x: tx, y: ty, tile: tile };
+
+            if (tile.has_unit && tile.unit_owner === getCurrentPlayerIndex()) {
+                // Select our unit
+                const units = gameState.observation.units;
+                selectedUnit = units.find(u => u.x === tx && u.y === ty);
+                updateSelectionUI();
+            } else {
+                selectedUnit = null;
+                updateSelectionUI();
+            }
+
+            renderMap();
+        }
+
+        function getCurrentPlayerIndex() {
+            if (!gameState || !gameState.agent) return 1;
+            return gameState.agent === 'player_0' ? 1 : 2;
+        }
+
+        function getUnitIndex(unitId) {
+            if (!gameState || !gameState.observation) return 0;
+            const units = gameState.observation.units;
+            for (let i = 0; i < units.length; i++) {
+                if (units[i].id === unitId) return i;
+            }
+            return 0;
+        }
+
+        function setActionMode(mode) {
+            actionMode = mode;
+            setStatus(`Click on a tile to ${mode}`);
+            renderMap();
+        }
+
+        function clearSelection() {
+            selectedTile = null;
+            selectedUnit = null;
+            actionMode = null;
+            updateSelectionUI();
+        }
+
+        function updateSelectionUI() {
+            const box = document.getElementById('selectionBox');
+            const title = document.getElementById('selectionTitle');
+            const details = document.getElementById('selectionDetails');
+            const actions = document.getElementById('unitActions');
+
+            if (selectedUnit) {
+                title.textContent = UNIT_NAMES[selectedUnit.type] || 'Unit';
+                details.innerHTML = `
+                    Position: (${selectedUnit.x}, ${selectedUnit.y})<br>
+                    Health: ${selectedUnit.health}/10<br>
+                    ${selectedUnit.moved ? '<span style="color:#e74c3c;">Already moved</span>' : '<span style="color:#2ecc71;">Can move</span>'}
+                `;
+
+                // Show unit action buttons
+                const canMove = !selectedUnit.moved && hasValidMoves(selectedUnit.id);
+                const canAttack = !selectedUnit.attacked && hasValidAttacks(selectedUnit.id);
+
+                document.getElementById('btnMove').disabled = !canMove;
+                document.getElementById('btnAttack').disabled = !canAttack;
+                actions.style.display = 'flex';
+            } else if (selectedTile) {
+                const tile = selectedTile.tile;
+                title.textContent = `Tile (${selectedTile.x}, ${selectedTile.y})`;
+                let html = `Terrain: ${TERRAIN_NAMES[tile.terrain]}<br>`;
+                if (tile.owner > 0) html += `Owner: Player ${tile.owner}<br>`;
+                if (tile.has_unit) {
+                    html += `Enemy unit: ${UNIT_NAMES[tile.unit_type]}<br>`;
+                }
+                if (tile.improvement_type > 0) {
+                    html += `Has improvement<br>`;
+                }
+                details.innerHTML = html;
+                actions.style.display = 'none';
+            } else {
+                title.textContent = 'No selection';
+                details.textContent = 'Click on the map to select a tile or unit';
+                actions.style.display = 'none';
+            }
+        }
+
+        function hasValidMoves(unitId) {
+            return (validActions.valid_moves || []).some(m => m.unit_id === unitId);
+        }
+
+        function hasValidAttacks(unitId) {
+            return (validActions.valid_attacks || []).some(a => a.unit_id === unitId);
+        }
+
+        function renderMap() {
+            if (!gameState || !gameState.observation) {
+                ctx.fillStyle = '#0f3460';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#666';
+                ctx.font = '20px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Start a new game', canvas.width/2, canvas.height/2);
+                return;
+            }
+
+            const tiles = gameState.observation.tiles;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Build tile map
+            const tileMap = {};
+            for (const tile of tiles) {
+                tileMap[`${tile.x},${tile.y}`] = tile;
+            }
+
+            // Get valid move/attack targets for highlighting
+            let validMoveTargets = new Set();
+            let validAttackTargets = new Set();
+
+            if (actionMode === 'move' && selectedUnit) {
+                for (const m of (validActions.valid_moves || [])) {
+                    if (m.unit_id === selectedUnit.id) {
+                        validMoveTargets.add(`${m.to_x},${m.to_y}`);
+                    }
+                }
+            } else if (actionMode === 'attack' && selectedUnit) {
+                for (const a of (validActions.valid_attacks || [])) {
+                    if (a.unit_id === selectedUnit.id) {
+                        validAttackTargets.add(`${a.target_x},${a.target_y}`);
+                    }
+                }
+            }
+
+            // Render tiles
+            for (let y = 0; y < mapSize; y++) {
+                for (let x = 0; x < mapSize; x++) {
+                    const tile = tileMap[`${x},${y}`];
+                    renderTile(x, y, tile, validMoveTargets, validAttackTargets);
+                }
+            }
+
+            // Highlight selected tile
+            if (selectedTile) {
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(selectedTile.x * tileSize, selectedTile.y * tileSize, tileSize, tileSize);
+            }
+
+            // Highlight hovered tile
+            if (hoveredTile && (!selectedTile || hoveredTile[0] !== selectedTile.x || hoveredTile[1] !== selectedTile.y)) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(hoveredTile[0] * tileSize, hoveredTile[1] * tileSize, tileSize, tileSize);
+            }
+        }
+
+        function renderTile(x, y, tile, validMoves, validAttacks) {
+            const px = x * tileSize;
+            const py = y * tileSize;
+
+            if (!tile) {
+                ctx.fillStyle = '#0a0a0a';
+                ctx.fillRect(px, py, tileSize, tileSize);
+                return;
+            }
+
+            // Terrain
+            ctx.fillStyle = TERRAIN_COLORS[tile.terrain] || '#1a1a1a';
+            if (!tile.explored) {
+                ctx.fillStyle = '#0a0a0a';
+            } else if (!tile.visible) {
+                ctx.fillStyle = darkenColor(TERRAIN_COLORS[tile.terrain] || '#1a1a1a');
+            }
+            ctx.fillRect(px, py, tileSize, tileSize);
+
+            // Valid move/attack highlighting
+            const key = `${x},${y}`;
+            if (validMoves.has(key)) {
+                ctx.fillStyle = 'rgba(46, 204, 113, 0.4)';
+                ctx.fillRect(px, py, tileSize, tileSize);
+            } else if (validAttacks.has(key)) {
+                ctx.fillStyle = 'rgba(231, 76, 60, 0.4)';
+                ctx.fillRect(px, py, tileSize, tileSize);
+            }
+
+            // Owner border
+            if (tile.owner > 0 && tile.owner <= 4 && tile.explored) {
+                ctx.strokeStyle = PLAYER_COLORS[tile.owner];
+                ctx.lineWidth = 3;
+                ctx.strokeRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
+            }
+
+            // Unit
+            if (tile.has_unit && tile.explored) {
+                const centerX = px + tileSize/2;
+                const centerY = py + tileSize/2;
+                const radius = tileSize * 0.35;
+
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                ctx.fillStyle = PLAYER_COLORS[tile.unit_owner] || '#e74c3c';
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.font = `bold ${tileSize * 0.35}px Arial`;
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(UNIT_SYMBOLS[tile.unit_type] || '?', centerX, centerY);
+
+                // Health bar
+                if (tile.unit_health > 0) {
+                    const barWidth = tileSize - 8;
+                    const barHeight = 4;
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(px + 4, py + tileSize - 8, barWidth, barHeight);
+                    ctx.fillStyle = tile.unit_health > 5 ? '#2ecc71' : '#e74c3c';
+                    ctx.fillRect(px + 4, py + tileSize - 8, barWidth * (tile.unit_health / 10), barHeight);
+                }
+            }
+
+            // Improvements
+            if (tile.improvement_type > 0 && tile.explored) {
+                ctx.font = `bold ${tileSize * 0.25}px Arial`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+
+                if (tile.improvement_type === 1) {
+                    if (tile.owner === 0) {
+                        ctx.fillStyle = '#888';
+                        ctx.fillText('V', px + 2, py + 2);
+                    } else if (tile.is_capital) {
+                        ctx.fillStyle = '#f39c12';
+                        ctx.fillText('*', px + 2, py + 2);
+                    } else {
+                        ctx.fillStyle = PLAYER_COLORS[tile.owner] || '#f1c40f';
+                        ctx.fillText('C', px + 2, py + 2);
+                    }
+                } else if (tile.improvement_type === 5) {
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillText('F', px + 2, py + 2);
+                } else if (tile.improvement_type === 6) {
+                    ctx.fillStyle = '#666';
+                    ctx.fillText('M', px + 2, py + 2);
+                } else {
+                    ctx.fillStyle = '#aaa';
+                    ctx.fillText('I', px + 2, py + 2);
+                }
+            }
+        }
+
+        function darkenColor(color) {
+            const r = parseInt(color.slice(1, 3), 16);
+            const g = parseInt(color.slice(3, 5), 16);
+            const b = parseInt(color.slice(5, 7), 16);
+            return `rgb(${r*0.4}, ${g*0.4}, ${b*0.4})`;
+        }
+
+        function handleMouseMove(event) {
+            if (!gameState) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mx = event.clientX - rect.left;
+            const my = event.clientY - rect.top;
+            const tx = Math.floor(mx / tileSize);
+            const ty = Math.floor(my / tileSize);
+
+            if (tx < 0 || tx >= mapSize || ty < 0 || ty >= mapSize) {
+                hoveredTile = null;
+                document.getElementById('tooltip').style.display = 'none';
+                return;
+            }
+
+            hoveredTile = [tx, ty];
+
+            const tiles = gameState.observation.tiles;
+            const tile = tiles.find(t => t.x === tx && t.y === ty);
+
+            if (tile) {
+                showTooltip(event, tile);
+            }
+
+            renderMap();
+        }
+
+        function showTooltip(event, tile) {
+            const tooltip = document.getElementById('tooltip');
+            let html = `<strong>(${tile.x}, ${tile.y})</strong><br>`;
+            html += `Terrain: ${TERRAIN_NAMES[tile.terrain]}<br>`;
+
+            if (!tile.explored) {
+                html += `<em style="color: #95a5a6;">Unexplored</em>`;
+            } else {
+                if (tile.owner > 0) html += `Owner: Player ${tile.owner}<br>`;
+                if (tile.has_unit) {
+                    html += `Unit: ${UNIT_NAMES[tile.unit_type]} (P${tile.unit_owner})<br>`;
+                    html += `Health: ${tile.unit_health}/10<br>`;
+                }
+                if (tile.is_capital) html += `<strong style="color: #f39c12;">CAPITAL</strong><br>`;
+            }
+
+            tooltip.innerHTML = html;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.pageX + 15) + 'px';
+            tooltip.style.top = (event.pageY + 15) + 'px';
+        }
+
+        function showGameOver(winner) {
+            document.getElementById('gameOverTitle').textContent = 'Game Over!';
+            document.getElementById('gameOverMessage').textContent = winner ? `${winner} wins!` : 'Draw!';
+            document.getElementById('gameOverOverlay').style.display = 'flex';
+        }
+
+        function setConnected(connected) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            if (connected) {
+                dot.classList.add('connected');
+                text.textContent = 'Connected';
+            } else {
+                dot.classList.remove('connected');
+                text.textContent = 'Disconnected';
+            }
+        }
+
+        function setStatus(msg) {
+            document.getElementById('statusBar').textContent = msg;
+        }
+
+        // Initial render
+        renderMap();
+    </script>
+</body>
+</html>
