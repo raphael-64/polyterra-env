@@ -555,6 +555,7 @@ public class PolyterraEnvBridge
             {
                 tileData["unit"] = new Dictionary<string, object>
                 {
+                    ["id"] = tile.unit.id,
                     ["type"] = tile.unit.type.ToString(),
                     ["owner"] = tile.unit.owner,
                     ["health"] = tile.unit.health,
