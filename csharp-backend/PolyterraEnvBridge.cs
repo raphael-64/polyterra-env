@@ -680,7 +680,7 @@ public class PolyterraEnvBridge
             ["available_techs"] = available_techs,
             ["cities"] = player.cities,
             ["kills"] = player.kills,
-            ["casualties"] = player.casualties,
+            // Note: casualties not tracked in PlayerState
 
             // Map dimensions
             ["map_width"] = gameState.Map.Width,

@@ -41,8 +41,11 @@ Thumbs.db
 polyterra-env-py/game_logs/
 
 # Training artifacts
+training/wandb/
+training/runs/
+training/replays/
+training/models/
 *.zip
-training/polyterra_ppo.zip
 
 # Virtual environments
 .venv/

@@ -1,7 +1,5 @@
 """
-PPO training for Polyterra with FULL action space.
-Properly handles MultiDiscrete actions with action masking.
-Includes reward shaping and replay logging.
+Simple PPO training for Polyterra.
 """
 import sys
 sys.path.insert(0, '../polyterra-env-py')
@@ -16,27 +14,14 @@ from stable_baselines3.common.callbacks import BaseCallback
 import gymnasium as gym
 from gymnasium import spaces
 
-# W&B for experiment tracking
 import wandb
 from wandb.integration.sb3 import WandbCallback
 
-# Action type names for logging
-ACTION_NAMES = {
-    0: "END_TURN", 1: "MOVE", 2: "ATTACK", 3: "BUILD", 4: "TRAIN",
-    5: "RESEARCH", 6: "UPGRADE", 7: "RECOVER", 8: "HEAL_OTHERS",
-    9: "PROMOTE", 10: "EXAMINE_RUINS", 11: "DISBAND", 12: "DESTROY",
-    13: "CAPTURE", 14: "HARVEST", 15: "EXAMINE", 16: "GROW_FOREST",
-}
 
+class SimplePolyterraWrapper(gym.Env):
+    """Wrapper: AEC -> Gym with flat obs and reward shaping."""
 
-class PolyterraGymWrapper(gym.Env):
-    """
-    Wraps Polyterra AEC env for SB3 with FULL action space.
-    - Flattens observations for MLP compatibility
-    - Keeps full MultiDiscrete action space
-    - Proper action masking for all action components
-    - Tracks stats for debugging
-    """
+    MAX_ACTIONS = 512
 
     def __init__(self, num_players=2, max_steps=200, map_size=15, reward_shaping=True):
         super().__init__()
@@ -44,354 +29,344 @@ class PolyterraGymWrapper(gym.Env):
         self.max_steps = max_steps
         self.map_size = map_size
         self.steps = 0
+        self.our_agent = None  # We play as player_0
         self.reward_shaping = reward_shaping
 
-        # Stats tracking
-        self.episode_stats = {
-            "invalid_actions": 0,
-            "end_turns": 0,
-            "moves": 0,
-            "attacks": 0,
-            "builds": 0,
-            "trains": 0,
-            "research": 0,
-            "other": 0,
-            "total_actions": 0,
-        }
-        self.prev_state = {}  # For reward shaping
+        # State tracking for reward shaping
+        self.prev_state = {}
 
-        # Initialize env
         self.aec_env.reset()
 
-        # FULL action space: [action_type, target_x, target_y, unit_idx, param1, param2]
-        self.action_space = spaces.MultiDiscrete([37, 50, 50, 100, 47, 10])
-
-        # Flattened observation space
+        self.action_space = spaces.Discrete(self.MAX_ACTIONS)
         obs_dim = 10 + map_size * map_size * 4
-        self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
-        )
+        self.observation_space = spaces.Box(-1.0, 1.0, shape=(obs_dim,), dtype=np.float32)
 
-        # Current action mask (tuple of 6 masks)
-        self._current_mask = None
-        self._update_mask()
+        self._action_mask = np.ones(self.MAX_ACTIONS, dtype=np.int8)
+        self._last_action_type = None
 
     def _flatten_obs(self, obs):
-        """Convert complex observation to flat vector."""
-        flat = []
+        """Dict obs -> flat vector."""
+        flat = [
+            obs.get('currency', 0) / 1000.0,
+            obs.get('score', 0) / 10000.0,
+            obs.get('turn', 0) / 30.0,
+            obs.get('num_cities', 0) / 10.0,
+            obs.get('num_kills', 0) / 100.0,
+            obs.get('num_casualties', 0) / 100.0,
+            obs.get('current_player_idx', 0) / 2.0,
+            obs.get('player_id', 0) / 3.0,
+            len(obs.get('units', [])) / 20.0,
+            len(obs.get('cities', [])) / 10.0,
+        ]
 
-        # Basic player stats (normalized)
-        flat.append(obs.get('currency', 0) / 1000.0)
-        flat.append(obs.get('score', 0) / 10000.0)
-        flat.append(obs.get('turn', 0) / 30.0)
-        flat.append(obs.get('num_cities', 0) / 10.0)
-        flat.append(obs.get('num_kills', 0) / 100.0)
-        flat.append(obs.get('num_casualties', 0) / 100.0)
-        flat.append(obs.get('current_player_idx', 0) / 2.0)
-        flat.append(obs.get('player_id', 0) / 3.0)
-        flat.append(len(obs.get('units', [])) / 20.0)
-        flat.append(len(obs.get('cities', [])) / 10.0)
-
-        # Simple tile grid
-        tiles = obs.get('tiles', [])
         tile_grid = np.zeros((self.map_size, self.map_size, 4), dtype=np.float32)
-
-        for tile in tiles:
+        for tile in obs.get('tiles', []):
             x, y = tile.get('x', 0), tile.get('y', 0)
             if 0 <= x < self.map_size and 0 <= y < self.map_size:
-                tile_grid[x, y, 0] = tile.get('explored', 0)
-                tile_grid[x, y, 1] = tile.get('owner', 0) / 4.0
-                tile_grid[x, y, 2] = tile.get('has_unit', 0)
-                tile_grid[x, y, 3] = tile.get('terrain', 0) / 7.0
+                tile_grid[x, y] = [
+                    tile.get('explored', 0),
+                    tile.get('owner', 0) / 4.0,
+                    tile.get('has_unit', 0),
+                    tile.get('terrain', 0) / 7.0,
+                ]
 
-        flat.extend(tile_grid.flatten())
-        return np.array(flat, dtype=np.float32)
+        return np.array(flat + list(tile_grid.flatten()), dtype=np.float32)
 
     def _update_mask(self):
-        """Update action mask from current observation."""
+        """Get action mask from current agent's observation."""
         agent = self.aec_env.agent_selection
-        if agent not in self.aec_env.agents:
-            self._current_mask = self._make_end_turn_only_mask()
-            return
+        if agent in self.aec_env.agents:
+            obs = self.aec_env.observe(agent)
+            mask = obs.get('action_mask')
+            if mask is not None:
+                self._action_mask = np.array(mask, dtype=np.int8)[:self.MAX_ACTIONS]
+                if len(self._action_mask) < self.MAX_ACTIONS:
+                    self._action_mask = np.pad(self._action_mask, (0, self.MAX_ACTIONS - len(self._action_mask)))
 
-        obs = self.aec_env.observe(agent)
-        action_mask = obs.get('action_mask', None)
-
-        if action_mask is None or not isinstance(action_mask, tuple):
-            self._current_mask = self._make_all_valid_mask()
-            return
-
-        # Convert each component to proper size
-        masks = []
-        expected_sizes = [37, 50, 50, 100, 47, 10]
-
-        for i, size in enumerate(expected_sizes):
-            if i < len(action_mask):
-                m = np.array(action_mask[i], dtype=np.int8)
-                if len(m) < size:
-                    m = np.pad(m, (0, size - len(m)))
-                m = m[:size]
-            else:
-                m = np.ones(size, dtype=np.int8)
-            masks.append(m)
-
-        self._current_mask = tuple(masks)
-
-    def _make_end_turn_only_mask(self):
-        """Create mask where only END_TURN (action 0) is valid."""
-        masks = []
-        sizes = [37, 50, 50, 100, 47, 10]
-        for i, size in enumerate(sizes):
-            m = np.zeros(size, dtype=np.int8)
-            if i == 0:
-                m[0] = 1
-            else:
-                m[0] = 1
-            masks.append(m)
-        return tuple(masks)
-
-    def _make_all_valid_mask(self):
-        """Create mask where all actions are valid."""
-        sizes = [37, 50, 50, 100, 47, 10]
-        return tuple(np.ones(s, dtype=np.int8) for s in sizes)
-
-    def _get_state_for_shaping(self, obs):
-        """Extract state values for reward shaping."""
+    def _extract_state(self, obs):
+        """Extract state values for reward shaping comparison."""
         return {
             "score": obs.get("score", 0),
             "currency": obs.get("currency", 0),
             "num_cities": obs.get("num_cities", 0),
             "num_units": len(obs.get("units", [])),
-            "explored_tiles": sum(1 for t in obs.get("tiles", []) if t.get("explored", False)),
             "num_kills": obs.get("num_kills", 0),
+            "explored_tiles": sum(1 for t in obs.get("tiles", []) if t.get("explored")),
         }
 
-    def _compute_shaped_reward(self, reward, obs, action_type):
-        """Add dense reward shaping."""
+    def _compute_shaped_reward(self, base_reward, prev_obs, curr_obs, action_type):
+        """Add dense reward shaping on top of base game reward."""
         if not self.reward_shaping:
-            return reward
+            return base_reward
 
-        shaped = reward
-        curr_state = self._get_state_for_shaping(obs)
+        shaped = base_reward
+        prev = self._extract_state(prev_obs) if prev_obs else {}
+        curr = self._extract_state(curr_obs)
 
-        if self.prev_state:
-            # Reward for exploration
-            explored_delta = curr_state["explored_tiles"] - self.prev_state["explored_tiles"]
+        if prev:
+            # Exploration reward: +0.1 per new tile
+            explored_delta = curr["explored_tiles"] - prev.get("explored_tiles", 0)
             shaped += explored_delta * 0.1
 
-            # Reward for economy growth
-            currency_delta = curr_state["currency"] - self.prev_state["currency"]
-            shaped += currency_delta * 0.01
+            # Economy reward: +0.02 per currency gained
+            currency_delta = curr["currency"] - prev.get("currency", 0)
+            shaped += max(0, currency_delta) * 0.02  # Only reward gains
 
-            # Reward for army growth
-            unit_delta = curr_state["num_units"] - self.prev_state["num_units"]
+            # Army reward: +0.5 per new unit
+            unit_delta = curr["num_units"] - prev.get("num_units", 0)
             shaped += unit_delta * 0.5
 
-            # Reward for city growth
-            city_delta = curr_state["num_cities"] - self.prev_state["num_cities"]
+            # City reward: +2.0 per new city
+            city_delta = curr["num_cities"] - prev.get("num_cities", 0)
             shaped += city_delta * 2.0
 
-            # Reward for kills
-            kill_delta = curr_state["num_kills"] - self.prev_state["num_kills"]
+            # Kill reward: +1.0 per kill
+            kill_delta = curr["num_kills"] - prev.get("num_kills", 0)
             shaped += kill_delta * 1.0
 
-        # Small reward for taking meaningful actions (not just END_TURN)
-        if action_type not in [0, None]:  # Not END_TURN
-            shaped += 0.01
+        # Action type bonuses (encourage diverse actions)
+        if action_type and action_type != "end_turn" and action_type != "invalid":
+            shaped += 0.01  # Small bonus for doing something
 
-        self.prev_state = curr_state
         return shaped
 
-    def _track_action(self, action, reward):
-        """Track action stats."""
-        self.episode_stats["total_actions"] += 1
-
-        if reward == -1.0:  # Invalid action penalty
-            self.episode_stats["invalid_actions"] += 1
-            return
-
-        if action is None:
-            return
-
-        action_type = action[0]
-        if action_type == 0:
-            self.episode_stats["end_turns"] += 1
-        elif action_type == 1:
-            self.episode_stats["moves"] += 1
-        elif action_type == 2:
-            self.episode_stats["attacks"] += 1
-        elif action_type == 3:
-            self.episode_stats["builds"] += 1
-        elif action_type == 4:
-            self.episode_stats["trains"] += 1
-        elif action_type == 5:
-            self.episode_stats["research"] += 1
-        else:
-            self.episode_stats["other"] += 1
-
     def reset(self, seed=None, options=None):
-        if seed is not None:
-            self.aec_env.reset(seed=seed)
-        else:
-            self.aec_env.reset()
+        self.aec_env.reset(seed=seed)
         self.steps = 0
-        self.prev_state = {}
-        self.episode_stats = {k: 0 for k in self.episode_stats}
+        self.our_agent = self.aec_env.agent_selection
+        self._last_action_type = None
 
         self._update_mask()
-        agent = self.aec_env.agent_selection
-        obs = self.aec_env.observe(agent)
-        self.prev_state = self._get_state_for_shaping(obs)
+        obs = self.aec_env.observe(self.our_agent)
+        self.prev_state = obs  # Store for reward shaping
         return self._flatten_obs(obs), {}
 
     def step(self, action):
         self.steps += 1
-        agent = self.aec_env.agent_selection
 
-        if agent not in self.aec_env.agents:
-            action_tuple = None
-        else:
-            action_tuple = tuple(int(a) for a in action)
+        # Our turn
+        self.aec_env.step(int(action))
+        reward = self.aec_env.rewards.get(self.our_agent, 0)
 
-        self.aec_env.step(action_tuple)
+        # Let opponent play (random valid action)
+        while self.aec_env.agent_selection != self.our_agent and self.aec_env.agents:
+            opp = self.aec_env.agent_selection
+            if opp in self.aec_env.agents:
+                opp_obs = self.aec_env.observe(opp)
+                opp_mask = opp_obs.get('action_mask', [])
+                valid_indices = np.where(np.array(opp_mask) == 1)[0]
+                opp_action = np.random.choice(valid_indices) if len(valid_indices) > 0 else 0
+                self.aec_env.step(int(opp_action))
 
-        # Get base reward
-        base_reward = self.aec_env.rewards.get(agent, 0)
-        self._track_action(action_tuple, base_reward)
+            # Check if game ended
+            if all(self.aec_env.terminations.get(a, False) or self.aec_env.truncations.get(a, False)
+                   for a in self.aec_env.possible_agents):
+                break
 
-        # Get observation for shaping
-        next_agent = self.aec_env.agent_selection
-        if next_agent in self.aec_env.agents:
-            obs = self.aec_env.observe(next_agent)
+        # Get our new observation
+        self._update_mask()
+        terminated = self.aec_env.terminations.get(self.our_agent, False)
+        truncated = self.aec_env.truncations.get(self.our_agent, False) or self.steps >= self.max_steps
+
+        if self.our_agent in self.aec_env.agents:
+            obs = self.aec_env.observe(self.our_agent)
             flat_obs = self._flatten_obs(obs)
         else:
-            obs = {}
             flat_obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+            terminated = True
 
-        # Apply reward shaping
-        action_type = action_tuple[0] if action_tuple else None
-        shaped_reward = self._compute_shaped_reward(base_reward, obs, action_type)
-
-        # Check termination
-        all_done = all(
-            self.aec_env.terminations.get(a, False) or self.aec_env.truncations.get(a, False)
-            for a in self.aec_env.possible_agents
-        )
-        truncated = self.steps >= self.max_steps
-        terminated = all_done
-
-        self._update_mask()
-
-        return flat_obs, shaped_reward, terminated, truncated, {"stats": self.episode_stats.copy()}
+        return flat_obs, reward, terminated, truncated, {}
 
     def action_masks(self):
-        """Return flattened action mask for MaskablePPO with MultiDiscrete."""
-        if self._current_mask is None:
-            self._update_mask()
-        return np.concatenate(self._current_mask)
-
-    def get_episode_stats(self):
-        """Get current episode stats."""
-        return self.episode_stats.copy()
+        return self._action_mask
 
     def close(self):
         self.aec_env.close()
 
 
-class ReplayAndStatsCallback(BaseCallback):
-    """Callback to log stats and save replays during training."""
+class StatsCallback(BaseCallback):
+    """Callback for logging and rich replays (viewable in polytopia_playable.html)."""
 
-    def __init__(self, save_freq=10000, replay_freq=50000, replay_dir="replays", verbose=0):
-        super().__init__(verbose)
-        self.save_freq = save_freq
-        self.replay_freq = replay_freq
+    def __init__(self, log_freq=1000, replay_freq=25000, replay_dir="replays"):
+        super().__init__()
+        self.log_freq = log_freq
+        self.replay_freq = replay_freq  # Less frequent due to file size
         self.replay_dir = replay_dir
-        self.episode_count = 0
-        self.cumulative_stats = {
-            "invalid_actions": 0,
-            "end_turns": 0,
-            "moves": 0,
-            "attacks": 0,
-            "builds": 0,
-            "trains": 0,
-            "research": 0,
-            "other": 0,
-            "total_actions": 0,
-        }
+        self.ep_rewards = []
         os.makedirs(replay_dir, exist_ok=True)
 
-    def _on_step(self) -> bool:
-        # Check for episode end via info
-        infos = self.locals.get("infos", [])
-        for info in infos:
-            if "stats" in info:
-                stats = info["stats"]
-                for k, v in stats.items():
-                    self.cumulative_stats[k] += v
-                self.episode_count += 1
+    def _on_step(self):
+        # Track episode rewards
+        if self.locals.get("dones", [False])[0]:
+            ep_info = self.locals.get("infos", [{}])[0].get("episode")
+            if ep_info:
+                self.ep_rewards.append(ep_info["r"])
 
-        # Log stats periodically
-        if self.n_calls % self.save_freq == 0 and self.cumulative_stats["total_actions"] > 0:
-            total = self.cumulative_stats["total_actions"]
-            invalid_rate = self.cumulative_stats["invalid_actions"] / total
-            end_turn_rate = self.cumulative_stats["end_turns"] / total
+        # Log periodically
+        if self.n_calls % self.log_freq == 0:
+            if self.ep_rewards:
+                wandb.log({
+                    "custom/mean_reward": np.mean(self.ep_rewards[-10:]),
+                    "custom/episodes": len(self.ep_rewards),
+                })
+            print(f"[{self.n_calls:,} steps] episodes={len(self.ep_rewards)}")
 
-            wandb.log({
-                "custom/invalid_action_rate": invalid_rate,
-                "custom/end_turn_rate": end_turn_rate,
-                "custom/move_rate": self.cumulative_stats["moves"] / total,
-                "custom/attack_rate": self.cumulative_stats["attacks"] / total,
-                "custom/build_rate": self.cumulative_stats["builds"] / total,
-                "custom/train_rate": self.cumulative_stats["trains"] / total,
-                "custom/research_rate": self.cumulative_stats["research"] / total,
-                "custom/episodes": self.episode_count,
-            }, step=self.n_calls)
-
-            # Reset stats
-            self.cumulative_stats = {k: 0 for k in self.cumulative_stats}
-
-        # Save replay periodically
+        # Save replay (less frequent - files are big)
         if self.n_calls % self.replay_freq == 0:
             self._save_replay()
 
         return True
 
     def _save_replay(self):
-        """Play one episode and save as JSON replay."""
-        env = self.training_env.envs[0]
-        unwrapped = env.env  # Get through ActionMasker wrapper
+        """Save replay in good_game.json format for viewing in polytopia_playable.html."""
+        from datetime import datetime
+        try:
+            # Create fresh env for replay
+            aec_env = PolyterraEnv(num_players=2)
+            aec_env.reset()
 
-        replay_data = {
-            "metadata": {"step": self.n_calls, "type": "training_checkpoint"},
-            "steps": []
-        }
+            replay = {
+                "metadata": {
+                    "start_time": datetime.now().isoformat(),
+                    "version": "1.0",
+                    "type": "training_checkpoint",
+                    "training_step": self.n_calls,
+                },
+                "steps": []
+            }
 
-        obs, _ = unwrapped.reset()
-        done = False
-        step_count = 0
+            our_agent = aec_env.agent_selection
+            step_count = 0
+            max_steps = 150  # Cap replay length
 
-        while not done and step_count < 100:
-            action_masks = unwrapped.action_masks()
-            action, _ = self.model.predict(obs, action_masks=action_masks, deterministic=True)
+            while step_count < max_steps and aec_env.agents:
+                agent = aec_env.agent_selection
+                if agent not in aec_env.agents:
+                    break
 
-            # Record step
-            replay_data["steps"].append({
-                "step": step_count,
-                "action_type": int(action[0]),
-                "action_name": ACTION_NAMES.get(int(action[0]), f"ACTION_{action[0]}"),
-                "action": [int(a) for a in action],
-            })
+                # Get full observation
+                full_obs = aec_env.observe(agent)
 
-            obs, reward, terminated, truncated, info = unwrapped.step(action)
-            done = terminated or truncated
-            step_count += 1
+                # Prepare observation for replay (matching good_game.json format)
+                obs_for_replay = {
+                    "turn": full_obs.get("turn", 0),
+                    "currency": full_obs.get("currency", 0),
+                    "score": full_obs.get("score", 0),
+                    "num_cities": full_obs.get("num_cities", 0),
+                    "num_kills": full_obs.get("num_kills", 0),
+                    "num_casualties": full_obs.get("num_casualties", 0),
+                    "num_units": len(full_obs.get("units", [])),
+                    "units": [
+                        {
+                            "type": str(u.get("type", 0)),
+                            "position": [u.get("x", 0), u.get("y", 0)],
+                            "health": u.get("health", 10.0),
+                            "moved": u.get("moved", False),
+                            "attacked": u.get("attacked", False),
+                        }
+                        for u in full_obs.get("units", [])
+                    ],
+                    "cities": [
+                        {
+                            "name": "",
+                            "position": [c.get("x", 0), c.get("y", 0)],
+                            "level": c.get("level", 1),
+                            "population": c.get("population", 0),
+                        }
+                        for c in full_obs.get("cities", [])
+                    ],
+                    "tiles": full_obs.get("tiles", []),
+                }
 
-        # Save replay
-        filepath = os.path.join(self.replay_dir, f"replay_step_{self.n_calls}.json")
-        with open(filepath, "w") as f:
-            json.dump(replay_data, f, indent=2)
+                # Get action
+                mask = full_obs.get("action_mask", [])
+                valid_actions_list = full_obs.get("valid_actions_list", [])
 
-        wandb.save(filepath)
+                if agent == our_agent:
+                    # Use trained model
+                    flat_obs = self._flatten_obs_for_model(full_obs)
+                    mask_arr = np.array(mask, dtype=np.int8)
+                    if len(mask_arr) < 512:
+                        mask_arr = np.pad(mask_arr, (0, 512 - len(mask_arr)))
+                    action_idx, _ = self.model.predict(flat_obs, action_masks=mask_arr, deterministic=True)
+                    action_idx = int(action_idx)
+                else:
+                    # Random valid action for opponent
+                    valid_indices = np.where(np.array(mask) == 1)[0]
+                    action_idx = int(np.random.choice(valid_indices)) if len(valid_indices) > 0 else 0
+
+                # Get action details for replay
+                action_dict = valid_actions_list[action_idx] if action_idx < len(valid_actions_list) else {"type": "invalid"}
+                action_type = action_dict.get("type", "unknown").upper()
+
+                action_for_replay = {
+                    "raw": [action_idx, 0, 0, 0, 0, 0],
+                    "type": action_type,
+                    "target": [action_dict.get("x", action_dict.get("to_x", 0)),
+                               action_dict.get("y", action_dict.get("to_y", 0))],
+                    "unit_idx": 0,
+                    "params": [0, 0],
+                }
+
+                # Record step
+                replay["steps"].append({
+                    "step": step_count,
+                    "agent": agent,
+                    "observation": obs_for_replay,
+                    "action": action_for_replay,
+                    "reward": aec_env.rewards.get(agent, 0),
+                    "info": {},
+                })
+
+                # Execute action
+                aec_env.step(action_idx)
+                step_count += 1
+
+                # Check if game ended
+                if all(aec_env.terminations.get(a, False) or aec_env.truncations.get(a, False)
+                       for a in aec_env.possible_agents):
+                    break
+
+            replay["metadata"]["end_time"] = datetime.now().isoformat()
+            replay["metadata"]["total_steps"] = step_count
+
+            path = f"{self.replay_dir}/replay_{self.n_calls}.json"
+            with open(path, "w") as f:
+                json.dump(replay, f, indent=2)
+
+            aec_env.close()
+            print(f"Saved replay: {path} ({step_count} steps)")
+
+        except Exception as e:
+            print(f"Replay failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _flatten_obs_for_model(self, obs, map_size=15):
+        """Flatten observation for model prediction."""
+        flat = [
+            obs.get('currency', 0) / 1000.0,
+            obs.get('score', 0) / 10000.0,
+            obs.get('turn', 0) / 30.0,
+            obs.get('num_cities', 0) / 10.0,
+            obs.get('num_kills', 0) / 100.0,
+            obs.get('num_casualties', 0) / 100.0,
+            obs.get('current_player_idx', 0) / 2.0,
+            obs.get('player_id', 0) / 3.0,
+            len(obs.get('units', [])) / 20.0,
+            len(obs.get('cities', [])) / 10.0,
+        ]
+        tile_grid = np.zeros((map_size, map_size, 4), dtype=np.float32)
+        for tile in obs.get('tiles', []):
+            x, y = tile.get('x', 0), tile.get('y', 0)
+            if 0 <= x < map_size and 0 <= y < map_size:
+                tile_grid[x, y] = [
+                    tile.get('explored', 0),
+                    tile.get('owner', 0) / 4.0,
+                    tile.get('has_unit', 0),
+                    tile.get('terrain', 0) / 7.0,
+                ]
+        return np.array(flat + list(tile_grid.flatten()), dtype=np.float32)
 
 
 def mask_fn(env):
@@ -399,100 +374,37 @@ def mask_fn(env):
 
 
 def main():
-    # Training config
     config = {
-        "algorithm": "MaskablePPO",
-        "policy": "MlpPolicy",
-        "total_timesteps": 1_000_000,
+        "total_timesteps": 100_000,
         "learning_rate": 3e-4,
-        "n_steps": 512,
+        "n_steps": 256,
         "batch_size": 64,
-        "n_epochs": 4,
-        "gamma": 0.99,
-        "ent_coef": 0.05,  # Higher entropy for more exploration
-        "vf_coef": 0.5,
-        "max_grad_norm": 0.5,
-        "num_players": 2,
-        "max_steps": 200,
-        "map_size": 15,
-        "reward_shaping": True,
+        "ent_coef": 0.05,
     }
 
-    # Initialize W&B
-    run = wandb.init(
-        project="polyterra",
-        config=config,
-        save_code=True,
-        monitor_gym=True,  # Auto-log gym metrics without tensorboard
-    )
+    run = wandb.init(project="polyterra", config=config, sync_tensorboard=True)
 
-    # Create environment with reward shaping
-    env = PolyterraGymWrapper(
-        num_players=config["num_players"],
-        max_steps=config["max_steps"],
-        map_size=config["map_size"],
-        reward_shaping=config["reward_shaping"],
-    )
+    env = SimplePolyterraWrapper()
     env = ActionMasker(env, mask_fn)
 
-    # Create model
     model = MaskablePPO(
-        config["policy"],
-        env,
-        verbose=0,
+        "MlpPolicy", env, verbose=1,  # verbose=1 to see progress
         learning_rate=config["learning_rate"],
         n_steps=config["n_steps"],
         batch_size=config["batch_size"],
-        n_epochs=config["n_epochs"],
-        gamma=config["gamma"],
         ent_coef=config["ent_coef"],
-        vf_coef=config["vf_coef"],
-        max_grad_norm=config["max_grad_norm"],
+        tensorboard_log=f"runs/{run.id}",
     )
 
-    # Callbacks
-    callbacks = [
-        WandbCallback(
-            model_save_path=f"models/{run.id}",
-            model_save_freq=50_000,
-            verbose=0,
-        ),
-        ReplayAndStatsCallback(
-            save_freq=5000,
-            replay_freq=50_000,
-            replay_dir=f"replays/{run.id}",
-            verbose=0,
-        ),
-    ]
-
-    # Train
     model.learn(
         total_timesteps=config["total_timesteps"],
-        callback=callbacks,
+        callback=[
+            WandbCallback(model_save_path=f"models/{run.id}", model_save_freq=25000, verbose=0),
+            StatsCallback(log_freq=1000, replay_freq=25000, replay_dir=f"replays/{run.id}"),
+        ],
     )
 
-    # Save final model
-    model.save(f"models/{run.id}/final_model")
-
-    # Final test episode
-    test_env = PolyterraGymWrapper(num_players=2, max_steps=100, reward_shaping=False)
-    test_env = ActionMasker(test_env, mask_fn)
-    obs, _ = test_env.reset()
-    total_reward = 0
-    steps = 0
-
-    while True:
-        action_masks = test_env.action_masks()
-        action, _ = model.predict(obs, action_masks=action_masks, deterministic=True)
-        obs, reward, terminated, truncated, _ = test_env.step(action)
-        total_reward += reward
-        steps += 1
-        if terminated or truncated:
-            break
-
-    wandb.log({"test/episode_reward": total_reward, "test/episode_length": steps})
-
-    test_env.close()
+    model.save(f"models/{run.id}/final")
     env.close()
     wandb.finish()
 

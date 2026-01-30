@@ -53,6 +53,10 @@ class PolyterraEnv(AECEnv):
     NUM_TRIBES = 17
     NUM_COMMAND_TYPES = 37  # 36 commands + EndTurn
 
+    # Max valid actions for padded action space
+    # This should be large enough to cover worst case (many units, many build options, etc.)
+    MAX_ACTIONS = 512
+
     # Action type enum indices
     ACTION_END_TURN = 0
     ACTION_MOVE = 1
@@ -236,58 +240,29 @@ class PolyterraEnv(AECEnv):
             ),
         }
 
-        # Only include action mask if enabled
+        # Action mask for the flattened action space
         if self.use_action_masking:
-            obs_space["action_mask"] = spaces.Tuple((
-                spaces.MultiBinary(self.NUM_COMMAND_TYPES),  # action_type
-                spaces.MultiBinary(50),  # target_x
-                spaces.MultiBinary(50),  # target_y
-                spaces.MultiBinary(100),  # unit_id_idx
-                spaces.MultiBinary(max(self.NUM_UNITS, self.NUM_IMPROVEMENTS, self.NUM_TECHS)),  # param1
-                spaces.MultiBinary(10),  # param2
-            ))
+            obs_space["action_mask"] = spaces.MultiBinary(self.MAX_ACTIONS)
+
+        # Valid actions mask (same as action_mask, but always included)
+        obs_space["valid_actions_mask"] = spaces.MultiBinary(self.MAX_ACTIONS)
 
         return spaces.Dict(obs_space)
 
     @functools.lru_cache(maxsize=None)
     def action_space(self, agent):
         """
-        Parameterized action space using MultiDiscrete
+        Discrete action space - agent picks an index into the valid actions list.
 
-        Action structure:
-        [action_type, target_x, target_y, unit_id_idx, param1, param2]
+        The observation includes:
+        - "valid_actions_list": padded list of MAX_ACTIONS action dicts
+        - "valid_actions_mask": binary mask indicating which indices are valid
 
-        - action_type: Command type (0-36)
-        - target_x, target_y: Target coordinates (0 to map_size-1)
-        - unit_id_idx: Index into visible units list (0-99)
-        - param1: Context-dependent (unit_type, improvement_type, tech_type)
-        - param2: Reserved for future use
-
-        Action types:
-        0  = END_TURN
-        1  = MOVE (unit_id_idx, target_x, target_y)
-        2  = ATTACK (unit_id_idx, target_x, target_y)
-        3  = BUILD (target_x, target_y, improvement_type=param1)
-        4  = TRAIN (target_x, target_y, unit_type=param1)
-        5  = RESEARCH (tech_type=param1)
-        6  = UPGRADE (target_x, target_y, unit_type=param1)
-        7  = RECOVER (unit_id_idx)
-        8  = HEAL_OTHERS (unit_id_idx, target_x, target_y)
-        9  = PROMOTE (unit_id_idx)
-        10 = EXAMINE_RUINS (target_x, target_y)
-        11 = DISBAND (unit_id_idx)
-        12 = DESTROY (target_x, target_y)
-        13 = CAPTURE (target_x, target_y)
-        ... (more action types)
+        Agent outputs an integer 0 to MAX_ACTIONS-1.
+        The action at that index in valid_actions_list is executed.
+        Invalid indices (where mask=0) should be masked during training.
         """
-        return spaces.MultiDiscrete([
-            self.NUM_COMMAND_TYPES,  # action_type
-            50,  # target_x
-            50,  # target_y
-            100,  # unit_id_idx
-            max(self.NUM_UNITS, self.NUM_IMPROVEMENTS, self.NUM_TECHS),  # param1
-            10,  # param2 (reserved)
-        ])
+        return spaces.Discrete(self.MAX_ACTIONS)
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Reset the environment"""
@@ -449,13 +424,19 @@ class PolyterraEnv(AECEnv):
             "units": units,
             "cities": cities,
             "opponents": opponents,
-            # Include valid actions so agent knows what it can do
+            # Include raw valid actions dict for reference (LLM agents can use this directly)
             "valid_actions": raw_obs.get("valid_actions", {}),
         }
 
-        # Only include action mask if enabled
+        # Always include flattened valid actions list and mask for the new action space
+        valid_actions = raw_obs.get("valid_actions", {})
+        flat_actions, valid_mask = self._flatten_valid_actions(valid_actions)
+        obs["valid_actions_list"] = flat_actions  # List of action dicts
+        obs["valid_actions_mask"] = valid_mask    # Binary mask (1=valid, 0=padding)
+
+        # Legacy action mask (for backwards compatibility, but deprecated)
         if self.use_action_masking:
-            obs["action_mask"] = self._compute_action_mask(raw_obs)
+            obs["action_mask"] = valid_mask  # Now just the flattened mask
 
         return obs
 
@@ -528,12 +509,138 @@ class PolyterraEnv(AECEnv):
         )
         return mask
 
-    def step(self, action: np.ndarray):
+    def _flatten_valid_actions(self, valid_actions: dict) -> Tuple[List[dict], np.ndarray]:
+        """
+        Flatten all valid actions into a single padded list with mask.
+
+        Returns:
+            Tuple of (padded_actions_list, valid_mask)
+            - padded_actions_list: List of MAX_ACTIONS action dicts
+            - valid_mask: numpy array of shape (MAX_ACTIONS,) with 1 for valid, 0 for padding
+        """
+        flat_actions = []
+
+        # End turn
+        if valid_actions.get('can_end_turn', False):
+            flat_actions.append({
+                "type": "end_turn",
+                "action_type": self.ACTION_END_TURN,
+            })
+
+        # Moves
+        for move in valid_actions.get('valid_moves', []):
+            flat_actions.append({
+                "type": "move",
+                "action_type": self.ACTION_MOVE,
+                "unit_id": move.get("unit_id"),
+                "from_x": move.get("from_x"),
+                "from_y": move.get("from_y"),
+                "to_x": move.get("to_x"),
+                "to_y": move.get("to_y"),
+            })
+
+        # Attacks
+        for attack in valid_actions.get('valid_attacks', []):
+            flat_actions.append({
+                "type": "attack",
+                "action_type": self.ACTION_ATTACK,
+                "unit_id": attack.get("unit_id"),
+                "from_x": attack.get("from_x"),
+                "from_y": attack.get("from_y"),
+                "target_x": attack.get("target_x"),
+                "target_y": attack.get("target_y"),
+            })
+
+        # Research
+        for tech in valid_actions.get('valid_research', []):
+            flat_actions.append({
+                "type": "research",
+                "action_type": self.ACTION_RESEARCH,
+                "tech_name": tech.get("tech_type"),  # Backend uses tech_type field
+                "cost": tech.get("cost"),
+            })
+
+        # Builds
+        for build in valid_actions.get('valid_builds', []):
+            flat_actions.append({
+                "type": "build",
+                "action_type": self.ACTION_BUILD,
+                "x": build.get("x"),
+                "y": build.get("y"),
+                "improvement_type": build.get("improvement_type"),
+                "cost": build.get("cost"),
+            })
+
+        # Trains
+        for train in valid_actions.get('valid_trains', []):
+            flat_actions.append({
+                "type": "train",
+                "action_type": self.ACTION_TRAIN,
+                "city_x": train.get("city_x"),
+                "city_y": train.get("city_y"),
+                "unit_type": train.get("unit_type"),
+                "cost": train.get("cost"),
+            })
+
+        # Captures
+        for capture in valid_actions.get('valid_captures', []):
+            flat_actions.append({
+                "type": "capture",
+                "action_type": self.ACTION_CAPTURE,
+                "unit_id": capture.get("unit_id"),
+                "x": capture.get("x"),
+                "y": capture.get("y"),
+            })
+
+        # Harvests
+        for harvest in valid_actions.get('valid_harvests', []):
+            flat_actions.append({
+                "type": "harvest",
+                "action_type": self.ACTION_HARVEST,
+                "x": harvest.get("x"),
+                "y": harvest.get("y"),
+                "improvement_type": harvest.get("improvement_type"),
+                "resource_type": harvest.get("resource_type"),
+                "cost": harvest.get("cost", 0),
+            })
+
+        # City rewards (multiple rewards per city level-up)
+        for city_reward in valid_actions.get('valid_city_rewards', []):
+            rewards = city_reward.get('rewards', [])
+            for idx, reward_name in enumerate(rewards):
+                flat_actions.append({
+                    "type": "city_reward",
+                    "action_type": self.ACTION_CITY_REWARD,
+                    "x": city_reward.get("x"),
+                    "y": city_reward.get("y"),
+                    "reward_name": reward_name,
+                    "reward_idx": idx,
+                    "city_level": city_reward.get("city_level"),
+                })
+
+        # Create mask
+        num_valid = len(flat_actions)
+        valid_mask = np.zeros(self.MAX_ACTIONS, dtype=np.int8)
+        valid_mask[:num_valid] = 1
+
+        # Pad with invalid actions
+        while len(flat_actions) < self.MAX_ACTIONS:
+            flat_actions.append({"type": "invalid", "action_type": -1})
+
+        # Truncate if too many (shouldn't happen with reasonable MAX_ACTIONS)
+        if len(flat_actions) > self.MAX_ACTIONS:
+            print(f"WARNING: {len(flat_actions)} valid actions exceeds MAX_ACTIONS={self.MAX_ACTIONS}")
+            flat_actions = flat_actions[:self.MAX_ACTIONS]
+            valid_mask[:] = 1  # All are valid in this case
+
+        return flat_actions, valid_mask
+
+    def step(self, action: int):
         """
         Execute one step in the environment
 
         Args:
-            action: MultiDiscrete action array [action_type, target_x, target_y, unit_idx, param1, param2]
+            action: Integer index into the valid_actions_list (0 to MAX_ACTIONS-1)
         """
         # Handle already-terminated agents (or agents not in active list)
         agent = self.agent_selection
@@ -546,17 +653,32 @@ class PolyterraEnv(AECEnv):
             return
 
         agent = self.agent_selection
+        action_idx = int(action)
 
-        # Parse action
-        action_type = int(action[0])
-        target_x = int(action[1])
-        target_y = int(action[2])
-        unit_idx = int(action[3])
-        param1 = int(action[4])
-        param2 = int(action[5])
+        # Get the valid actions list for current agent
+        raw_obs = self._raw_observations.get(agent, {})
+        valid_actions = raw_obs.get('valid_actions', {})
+        flat_actions, valid_mask = self._flatten_valid_actions(valid_actions)
 
-        # Convert to command for C# backend
-        command = self._action_to_command(action_type, target_x, target_y, unit_idx, param1, param2)
+        # Validate action index
+        if action_idx < 0 or action_idx >= self.MAX_ACTIONS:
+            self._clear_rewards()
+            self.rewards[agent] = -1.0
+            self.infos[agent] = {"error": f"Action index {action_idx} out of range", "invalid_action": True}
+            return
+
+        # Check if action is valid (not padding)
+        if valid_mask[action_idx] == 0:
+            self._clear_rewards()
+            self.rewards[agent] = -1.0
+            self.infos[agent] = {"error": f"Action index {action_idx} is invalid (padding)", "invalid_action": True}
+            return
+
+        # Get the action dict
+        action_dict = flat_actions[action_idx]
+
+        # Convert action dict to command for backend
+        command = self._action_dict_to_command(action_dict)
 
         response = self._send_command(command)
 
@@ -602,6 +724,116 @@ class PolyterraEnv(AECEnv):
 
         # Note: We trust the C# backend's agent_selection completely.
         # Do NOT use _agent_selector here as it will cause double advancement.
+
+    def _action_dict_to_command(self, action_dict: dict) -> dict:
+        """
+        Convert a flattened action dict to a C# backend command.
+
+        Args:
+            action_dict: Action dictionary from the flattened valid actions list
+
+        Returns:
+            Command dict ready to send to C# backend
+        """
+        action_type = action_dict.get("type")
+
+        if action_type == "end_turn":
+            return {"command": "step", "action_type": "end_turn", "action_params": {}}
+
+        elif action_type == "move":
+            return {
+                "command": "step",
+                "action_type": "move",
+                "action_params": {
+                    "unit_id": action_dict["unit_id"],
+                    "from_x": action_dict["from_x"],
+                    "from_y": action_dict["from_y"],
+                    "to_x": action_dict["to_x"],
+                    "to_y": action_dict["to_y"],
+                }
+            }
+
+        elif action_type == "attack":
+            return {
+                "command": "step",
+                "action_type": "attack",
+                "action_params": {
+                    "unit_id": action_dict["unit_id"],
+                    "from_x": action_dict["from_x"],
+                    "from_y": action_dict["from_y"],
+                    "target_x": action_dict["target_x"],
+                    "target_y": action_dict["target_y"],
+                }
+            }
+
+        elif action_type == "research":
+            return {
+                "command": "step",
+                "action_type": "research",
+                "action_params": {
+                    "tech_type": action_dict["tech_name"],
+                }
+            }
+
+        elif action_type == "build":
+            return {
+                "command": "step",
+                "action_type": "build",
+                "action_params": {
+                    "x": action_dict["x"],
+                    "y": action_dict["y"],
+                    "improvement_type": action_dict["improvement_type"],
+                }
+            }
+
+        elif action_type == "train":
+            return {
+                "command": "step",
+                "action_type": "train",
+                "action_params": {
+                    "city_x": action_dict["city_x"],
+                    "city_y": action_dict["city_y"],
+                    "unit_type": action_dict["unit_type"],
+                }
+            }
+
+        elif action_type == "capture":
+            return {
+                "command": "step",
+                "action_type": "capture",
+                "action_params": {
+                    "unit_id": action_dict["unit_id"],
+                    "x": action_dict["x"],
+                    "y": action_dict["y"],
+                }
+            }
+
+        elif action_type == "harvest":
+            return {
+                "command": "step",
+                "action_type": "harvest",
+                "action_params": {
+                    "x": action_dict["x"],
+                    "y": action_dict["y"],
+                    "improvement_type": action_dict["improvement_type"],
+                }
+            }
+
+        elif action_type == "city_reward":
+            return {
+                "command": "step",
+                "action_type": "city_reward",
+                "action_params": {
+                    "x": action_dict["x"],
+                    "y": action_dict["y"],
+                    "reward": action_dict["reward_name"],
+                }
+            }
+
+        else:
+            # Unknown action type - default to end turn
+            print(f"WARNING: Unknown action type '{action_type}', defaulting to end_turn")
+            return {"command": "step", "action_type": "end_turn", "action_params": {}}
 
     def _action_to_command(self, action_type: int, target_x: int, target_y: int,
                            unit_idx: int, param1: int, param2: int) -> dict:
