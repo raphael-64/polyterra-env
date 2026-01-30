@@ -233,7 +233,48 @@ public class PolyterraEnvBridge
             });
         }
 
-        bool success = actionManager.ExecuteCommand(command, out string error);
+        bool success;
+        string error;
+
+        if (command == null)
+        {
+            // Action was handled directly in ParseAction (e.g., harvest)
+            // Process any queued actions
+            ActionManagerUtils.PerformAllQueuedActions(gameState);
+            success = true;
+            error = null;
+        }
+        else
+        {
+            success = actionManager.ExecuteCommand(command, out error);
+        }
+
+        // Process any queued actions from the command (e.g., battle damage from attacks)
+        ActionManagerUtils.PerformAllQueuedActions(gameState);
+
+        // Auto-resolve any pending city level up triggers (choose PopulationGrowth by default)
+        // Check for triggers on ALL players, not just the current one
+        // NOTE: PlayerStates[0] is Player 1 (Id=1), so start at index 0
+        for (int pIdx = 0; pIdx < gameState.PlayerStates.Count; pIdx++)
+        {
+            var p = gameState.PlayerStates[pIdx];
+            while (gameState.TryGetPendingCommandTrigger(p.Id, out var trigger))
+            {
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Found pending trigger for player {p.Id}: type={trigger.type} at ({trigger.coordinates.X},{trigger.coordinates.Y})\n");
+                if (trigger.type == CommandTriggerType.CityLevelUp)
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Auto-resolving CityLevelUp trigger\n");
+                    var rewardCmd = new CityRewardCommand(p.Id, CityReward.PopulationGrowth, trigger.coordinates);
+                    actionManager.ExecuteCommand(rewardCmd, out _);
+                    ActionManagerUtils.PerformAllQueuedActions(gameState);
+                }
+                else
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Unknown trigger type, breaking\n");
+                    break;
+                }
+            }
+        }
 
         if (!success)
         {
@@ -245,6 +286,15 @@ public class PolyterraEnvBridge
         }
 
         File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After action: Player {gameState.PlayerStates[gameState.CurrentPlayerIndex].Id}, Index {gameState.CurrentPlayerIndex}, Turn {gameState.CurrentTurn}\n");
+
+        // Debug: Log all unit health after action
+        foreach (var t in gameState.Map.Tiles)
+        {
+            if (t.unit != null)
+            {
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitHealth] ({t.coordinates.X},{t.coordinates.Y}): owner={t.unit.owner}, health={t.unit.health}\n");
+            }
+        }
 
         // If we land on Nature after command execution, skip it
         // This happens when a player ends turn and Nature is next
@@ -330,8 +380,19 @@ public class PolyterraEnvBridge
                 int targetX = GetIntParam(actionParams, "target_x");
                 int targetY = GetIntParam(actionParams, "target_y");
 
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[Attack] from ({fromX},{fromY}) to ({targetX},{targetY})\n");
+
                 var fromCoords = new WorldCoordinates((ushort)fromX, (ushort)fromY);
                 var fromTile = gameState.Map.GetTile(fromCoords);
+
+                var targetCoords = new WorldCoordinates((ushort)targetX, (ushort)targetY);
+                var targetTile = gameState.Map.GetTile(targetCoords);
+
+                if (fromTile?.unit != null && targetTile?.unit != null)
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[Attack] Attacker health: {fromTile.unit.health}, Defender health: {targetTile.unit.health}\n");
+                }
+
                 if (fromTile?.unit == null)
                 {
                     throw new Exception($"No unit at ({fromX}, {fromY})");
@@ -362,10 +423,14 @@ public class PolyterraEnvBridge
                 int y = GetIntParam(actionParams, "city_y");
                 string unitTypeStr = GetStringParam(actionParams, "unit_type");
 
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[Train] Received unit_type string: \"{unitTypeStr}\"\n");
+
                 if (!Enum.TryParse<UnitData.Type>(unitTypeStr, true, out var unitType))
                 {
                     throw new Exception($"Invalid unit type: {unitTypeStr}");
                 }
+
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[Train] Parsed to enum: {unitType} (value={(int)unitType})\n");
 
                 var coords = new WorldCoordinates((ushort)x, (ushort)y);
                 return new TrainCommand(player.Id, unitType, coords);
@@ -397,6 +462,80 @@ public class PolyterraEnvBridge
                 int y = GetIntParam(actionParams, "y");
                 var coords = new WorldCoordinates((ushort)x, (ushort)y);
                 return new RecoverCommand(player.Id, coords);
+            }
+
+            case "capture":
+            {
+                int x = GetIntParam(actionParams, "target_x");
+                int y = GetIntParam(actionParams, "target_y");
+                uint unitId = (uint)GetIntParam(actionParams, "unit_id");
+                var coords = new WorldCoordinates((ushort)x, (ushort)y);
+                return new CaptureCommand(player.Id, unitId, coords);
+            }
+
+            case "harvest":
+            {
+                // Harvesting resources creates a hidden improvement (hunting, fishing, etc.)
+                // Hidden improvements bypass normal BuildCommand validation
+                int x = GetIntParam(actionParams, "x");
+                int y = GetIntParam(actionParams, "y");
+                string improvementTypeStr = GetStringParam(actionParams, "improvement_type");
+
+                if (!Enum.TryParse<ImprovementData.Type>(improvementTypeStr, true, out var improvementType))
+                {
+                    throw new Exception($"Invalid improvement type: {improvementTypeStr}");
+                }
+
+                var coords = new WorldCoordinates((ushort)x, (ushort)y);
+
+                // Validate manually for hidden improvements
+                if (!gameState.GameLogicData.TryGetData(improvementType, out var impData))
+                {
+                    throw new Exception($"Unknown improvement: {improvementTypeStr}");
+                }
+
+                // Check if player has this unlocked
+                if (!gameState.GameLogicData.IsUnlocked(improvementType, player))
+                {
+                    throw new Exception($"Improvement not unlocked: {improvementTypeStr}");
+                }
+
+                // Check if the tile has the right resource
+                var tile = gameState.Map.GetTile(coords);
+                if (tile == null)
+                {
+                    throw new Exception("Invalid tile coordinates");
+                }
+
+                var resource = tile.GetResource(gameState, player.Id);
+                if (resource == null)
+                {
+                    throw new Exception("No resource on this tile");
+                }
+
+                // Verify this improvement is for this resource
+                var expectedImprovement = gameState.GameLogicData.GetImprovementForResource(resource.type);
+                if (expectedImprovement == null || expectedImprovement.type != improvementType)
+                {
+                    throw new Exception($"Wrong improvement for resource {resource.type}");
+                }
+
+                // Debug: Check ruling city
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[Harvest] Tile ({x},{y}) rulingCity: ({tile.rulingCityCoordinates.X},{tile.rulingCityCoordinates.Y}), owner: {tile.owner}\n");
+
+                var rulingCityTile = gameState.Map.GetTile(tile.rulingCityCoordinates);
+                if (rulingCityTile?.improvement != null)
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[Harvest] RulingCity level={rulingCityTile.improvement.level}, xp={rulingCityTile.improvement.xp}, pop={rulingCityTile.improvement.population}\n");
+                }
+                else
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[Harvest] No ruling city improvement found!\n");
+                }
+
+                // Directly add the build action to bypass hidden improvement check
+                gameState.ActionStack.Add(new BuildAction(player.Id, improvementType, coords, deductCost: false));
+                return null;  // Signal that we handled this ourselves
             }
 
             default:
@@ -729,6 +868,8 @@ public class PolyterraEnvBridge
         var validAttacks = new List<Dictionary<string, object>>();
         var validBuilds = new List<Dictionary<string, object>>();
         var validTrains = new List<Dictionary<string, object>>();
+        var validCaptures = new List<Dictionary<string, object>>();
+        var validHarvests = new List<Dictionary<string, object>>();
 
         // Check if player can end turn (almost always valid)
         var endTurnCmd = new EndTurnCommand(player.Id);
@@ -736,15 +877,35 @@ public class PolyterraEnvBridge
 
         // Check valid research options using game logic's GetUnlockableTech
         var validTechs = new List<string>();
+
+        // Debug: Log player's available techs
+        File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] Player {player.Id} available techs: {string.Join(", ", player.availableTech.Select(t => $"{t}({(int)t})"))}\n");
+
+        // Debug: Log tech data for each available tech
+        foreach (var availTech in player.availableTech)
+        {
+            if (gameState.GameLogicData.TryGetData(availTech, out var techData))
+            {
+                var unlockNames = string.Join(", ", techData.techUnlocks.Select(t => $"{t.type}(idx={t.idx})"));
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] Tech {availTech} (idx={techData.idx}) unlocks: [{unlockNames}]\n");
+            }
+        }
+
         var unlockableTechs = gameState.GameLogicData.GetUnlockableTech(player);
         if (unlockableTechs != null)
         {
+            File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] GetUnlockableTech returned: {string.Join(", ", unlockableTechs.Select(t => $"{t.type}(idx={t.idx})"))}\n");
+
             foreach (var tech in unlockableTechs)
             {
                 var researchCmd = new ResearchCommand(player.Id, tech.type);
-                if (researchCmd.IsValid(gameState))
+                if (researchCmd.IsValid(gameState, out string validationError))
                 {
                     validTechs.Add(tech.type.ToString());
+                }
+                else
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] Tech {tech.type} NOT valid: {validationError}\n");
                 }
             }
         }
@@ -817,6 +978,18 @@ public class PolyterraEnvBridge
                 {
                     validActions[$"can_promote_{unit.id}"] = true;
                 }
+
+                // Check if unit can capture a city/village (unit must be ON the tile)
+                var captureCmd = new CaptureCommand(player.Id, unit.id, tile.coordinates);
+                if (captureCmd.IsValid(gameState))
+                {
+                    validCaptures.Add(new Dictionary<string, object>
+                    {
+                        ["unit_id"] = unit.id,
+                        ["x"] = tile.coordinates.X,
+                        ["y"] = tile.coordinates.Y
+                    });
+                }
             }
 
             // Check build/train actions if this tile has a city owned by player
@@ -824,8 +997,24 @@ public class PolyterraEnvBridge
                 tile.improvement != null &&
                 tile.improvement.type == Polytopia.Data.ImprovementData.Type.City)
             {
+                // Debug: Log player's available techs and their unit unlocks
+                var unlockedTechList = gameState.GameLogicData.GetUnlockedTech(player);
+                if (unlockedTechList != null)
+                {
+                    foreach (var tech in unlockedTechList)
+                    {
+                        var unitUnlockNames = string.Join(", ", tech.unitUnlocks.Select(u => u.type.ToString()));
+                        if (tech.unitUnlocks.Count > 0)
+                        {
+                            File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitUnlocks] Tech {tech.type} (idx={tech.idx}) unlocks units: [{unitUnlockNames}]\n");
+                        }
+                    }
+                }
+
                 // Check valid unit training using game logic's GetUnlockedUnits
                 var unlockedUnits = gameState.GameLogicData.GetUnlockedUnits(player, gameState, false);
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitUnlocks] GetUnlockedUnits returned: {string.Join(", ", unlockedUnits?.Select(u => u.type.ToString()) ?? new[] {"null"})}\n");
+
                 if (unlockedUnits != null)
                 {
                     foreach (var unitData in unlockedUnits)
@@ -873,6 +1062,30 @@ public class PolyterraEnvBridge
                                         });
                                     }
                                 }
+
+                                // Check for harvestable resources (hidden improvements like hunting, fishing, etc.)
+                                var targetTile = gameState.Map.GetTile(targetCoords);
+                                if (targetTile != null && targetTile.improvement == null)
+                                {
+                                    var resource = targetTile.GetResource(gameState, player.Id);
+                                    if (resource != null)
+                                    {
+                                        // Get the improvement that harvests this resource
+                                        var harvestImprovement = gameState.GameLogicData.GetImprovementForResource(resource.type);
+                                        if (harvestImprovement != null &&
+                                            harvestImprovement.hidden &&
+                                            gameState.GameLogicData.IsUnlocked(harvestImprovement.type, player))
+                                        {
+                                            validHarvests.Add(new Dictionary<string, object>
+                                            {
+                                                ["x"] = targetX,
+                                                ["y"] = targetY,
+                                                ["resource_type"] = resource.type.ToString(),
+                                                ["improvement_type"] = harvestImprovement.type.ToString()
+                                            });
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -884,6 +1097,8 @@ public class PolyterraEnvBridge
         validActions["valid_attacks"] = validAttacks;
         validActions["valid_builds"] = validBuilds;
         validActions["valid_trains"] = validTrains;
+        validActions["valid_captures"] = validCaptures;
+        validActions["valid_harvests"] = validHarvests;
 
         return validActions;
     }

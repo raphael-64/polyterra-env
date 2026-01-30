@@ -20,40 +20,40 @@ TRIBE_IDX_TO_NAME = {
     13: "xinxi",
 }
 
-# Unit mappings
+# Unit mappings - idx values MUST match C# UnitData.Type enum ordinals
 UNIT_NAME_TO_IDX = {
     "scout": 1,
     "warrior": 2,
     "rider": 3,
-    "archer": 4,
+    "knight": 4,
     "defender": 5,
-    "swordsman": 6,
-    "catapult": 7,
-    "knight": 8,
-    "mindbender": 9,
-    "ship": 10,
-    "battleship": 11,
-    "boat": 13,
-    "giant": 14,
+    "ship": 6,
+    "battleship": 7,
+    "catapult": 8,
+    "archer": 9,
+    "mindbender": 10,
+    "swordsman": 11,
+    "giant": 12,
+    "boat": 14,
 }
 
 UNIT_IDX_TO_NAME = {
     1: "scout",
     2: "warrior",
     3: "rider",
-    4: "archer",
+    4: "knight",
     5: "defender",
-    6: "swordsman",
-    7: "catapult",
-    8: "knight",
-    9: "mindbender",
-    10: "ship",
-    11: "battleship",
-    13: "boat",
-    14: "giant",
+    6: "ship",
+    7: "battleship",
+    8: "catapult",
+    9: "archer",
+    10: "mindbender",
+    11: "swordsman",
+    12: "giant",
+    14: "boat",
 }
 
-# Technology mappings
+# Technology mappings - idx values MUST match C# TechData.Type enum ordinals
 TECH_NAME_TO_IDX = {
     "basic": 0,
     "riding": 1,
@@ -80,6 +80,8 @@ TECH_NAME_TO_IDX = {
     "philosophy": 22,
     "mining": 23,
     "smithery": 24,
+    "freediving": 25,
+    "diplomacy": 38,
 }
 
 TECH_IDX_TO_NAME = {
@@ -108,6 +110,8 @@ TECH_IDX_TO_NAME = {
     22: "philosophy",
     23: "mining",
     24: "smithery",
+    25: "freediving",
+    38: "diplomacy",
 }
 
 # Improvement mappings
@@ -180,17 +184,23 @@ TERRAIN_IDX_TO_NAME = {
     5: "forest",
 }
 
-# Resource mappings
+# Resource mappings - MUST match ResourceData.Type enum in C#
 RESOURCE_NAME_TO_IDX = {
-    "fruit": 0,
+    "none": 0,
     "game": 1,
-    "fish": 2,
-    "metal": 3,
+    "crop": 2,
+    "fish": 3,
+    "whale": 4,
+    "metal": 5,
+    "fruit": 6,
 }
 
 RESOURCE_IDX_TO_NAME = {
-    0: "fruit",
+    0: "none",
     1: "game",
-    2: "fish",
-    3: "metal",
+    2: "crop",
+    3: "fish",
+    4: "whale",
+    5: "metal",
+    6: "fruit",
 }

@@ -190,7 +190,7 @@
       "growthRate": 0
     },
     "archer": {
-      "idx": 4,
+      "idx": 9,
       "hidden": false,
       "cost": 3,
       "health": 10,
@@ -234,7 +234,7 @@
       "growthRate": 0
     },
     "swordsman": {
-      "idx": 6,
+      "idx": 11,
       "hidden": false,
       "cost": 5,
       "health": 15,
@@ -256,7 +256,7 @@
       "growthRate": 0
     },
     "catapult": {
-      "idx": 7,
+      "idx": 8,
       "hidden": false,
       "cost": 8,
       "health": 10,
@@ -275,7 +275,7 @@
       "growthRate": 0
     },
     "knight": {
-      "idx": 8,
+      "idx": 4,
       "hidden": false,
       "cost": 8,
       "health": 15,
@@ -297,7 +297,7 @@
       "growthRate": 0
     },
     "mindbender": {
-      "idx": 9,
+      "idx": 10,
       "hidden": false,
       "cost": 5,
       "health": 10,
@@ -320,7 +320,7 @@
       "growthRate": 0
     },
     "ship": {
-      "idx": 10,
+      "idx": 6,
       "hidden": false,
       "cost": 5,
       "health": 20,
@@ -340,7 +340,7 @@
       "growthRate": 0
     },
     "battleship": {
-      "idx": 11,
+      "idx": 7,
       "hidden": false,
       "cost": 15,
       "health": 30,
@@ -361,7 +361,7 @@
       "growthRate": 0
     },
     "boat": {
-      "idx": 13,
+      "idx": 14,
       "hidden": true,
       "cost": 0,
       "health": 15,
@@ -381,7 +381,7 @@
       "growthRate": 0
     },
     "giant": {
-      "idx": 14,
+      "idx": 12,
       "hidden": false,
       "cost": 20,
       "health": 40,
@@ -497,7 +497,7 @@
         "shields"
       ],
       "improvementUnlocks": [
-        "farm"
+        "harvestfruit"
       ],
       "unitUnlocks": [],
       "abilityUnlocks": [],
@@ -769,7 +769,7 @@
       "defenceBonusUnlocks": {}
     },
     "diplomacy": {
-      "idx": 27,
+      "idx": 38,
       "cost": 3,
       "techUnlocks": [],
       "improvementUnlocks": [],
@@ -780,7 +780,7 @@
       "defenceBonusUnlocks": {}
     },
     "freediving": {
-      "idx": 26,
+      "idx": 25,
       "cost": 2,
       "techUnlocks": [
         "aquatism"
@@ -839,6 +839,7 @@
       "hidden": false,
       "cost": 5,
       "improvementAbilities": [],
+      "rewards": [{"population": 2}],
       "terrainRequirements": [
         {
           "terrain": "field",
@@ -852,6 +853,7 @@
       "hidden": false,
       "cost": 5,
       "improvementAbilities": [],
+      "rewards": [{"population": 1}],
       "terrainRequirements": [],
       "adjacencyRequirements": [
         {
@@ -866,6 +868,7 @@
       "hidden": true,
       "cost": 0,
       "improvementAbilities": [],
+      "rewards": [{"population": 1}],
       "terrainRequirements": [
         {
           "terrain": "ocean",
@@ -879,6 +882,7 @@
       "hidden": false,
       "cost": 5,
       "improvementAbilities": [],
+      "rewards": [{"population": 2}],
       "terrainRequirements": [
         {
           "terrain": "ocean",
@@ -892,6 +896,7 @@
       "hidden": true,
       "cost": 0,
       "improvementAbilities": [],
+      "rewards": [{"population": 1}],
       "terrainRequirements": [
         {
           "terrain": "forest",
@@ -921,6 +926,7 @@
       "hidden": false,
       "cost": 2,
       "improvementAbilities": [],
+      "rewards": [{"population": 1}],
       "terrainRequirements": [
         {
           "terrain": "forest",
@@ -934,6 +940,7 @@
       "hidden": false,
       "cost": 5,
       "improvementAbilities": [],
+      "rewards": [{"population": 1}],
       "terrainRequirements": [],
       "adjacencyRequirements": [
         {
@@ -956,7 +963,13 @@
       "hidden": true,
       "cost": 0,
       "improvementAbilities": [],
-      "terrainRequirements": [],
+      "rewards": [{"population": 1}],
+      "terrainRequirements": [
+        {
+          "terrain": "field",
+          "resource": "fruit"
+        }
+      ],
       "adjacencyRequirements": []
     },
     "whalehunting": {
@@ -964,7 +977,13 @@
       "hidden": true,
       "cost": 0,
       "improvementAbilities": [],
-      "terrainRequirements": [],
+      "rewards": [{"currency": 10}],
+      "terrainRequirements": [
+        {
+          "terrain": "ocean",
+          "resource": "whale"
+        }
+      ],
       "adjacencyRequirements": []
     },
     "temple": {
@@ -1004,6 +1023,7 @@
       "hidden": false,
       "cost": 5,
       "improvementAbilities": [],
+      "rewards": [{"population": 2}],
       "terrainRequirements": [
         {
           "terrain": "mountain",
@@ -1017,6 +1037,7 @@
       "hidden": false,
       "cost": 5,
       "improvementAbilities": [],
+      "rewards": [{"population": 2}],
       "terrainRequirements": [],
       "adjacencyRequirements": [
         {

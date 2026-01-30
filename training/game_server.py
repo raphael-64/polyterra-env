@@ -5,11 +5,28 @@ Wraps PolyterraEnv and exposes REST API for the web interface.
 import sys
 sys.path.insert(0, '../polyterra-env-py')
 
+import json
+import numpy as np
 from flask import Flask, jsonify, request
+from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
 from polyterra_env import PolyterraEnv
 
+
+class NumpyJSONProvider(DefaultJSONProvider):
+    """Custom JSON provider that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 app = Flask(__name__)
+app.json = NumpyJSONProvider(app)
 CORS(app)
 
 # Global game instance
@@ -27,6 +44,7 @@ def serialize_observation(obs):
         "num_units": int(len(obs.get("units", []))),
         "num_kills": int(obs.get("num_kills", 0)),
         "num_casualties": int(obs.get("num_casualties", 0)),
+        "available_techs": get_raw_techs(),
         "units": [
             {
                 "id": u.get("id", i),
@@ -62,7 +80,10 @@ def serialize_observation(obs):
                 "unit_owner": int(t.get("unit_owner", 0)),
                 "unit_health": float(t.get("unit_health", 0)),
                 "improvement_type": int(t.get("improvement_type", 0)),
+                "improvement_level": int(t.get("improvement_level", 0)),
+                "city_population": int(t.get("city_population", 0)),
                 "is_capital": int(t.get("is_capital", 0)),
+                "resource": int(t.get("resource", 0)),
             }
             for t in obs.get("tiles", [])
         ],
@@ -77,6 +98,16 @@ def get_valid_actions():
 
     raw_obs = env._raw_observations.get(current_agent, {})
     return raw_obs.get("valid_actions", {})
+
+
+def get_raw_techs():
+    """Get tech names from raw observation."""
+    global env, current_agent
+    if env is None or current_agent is None:
+        return []
+
+    raw_obs = env._raw_observations.get(current_agent, {})
+    return raw_obs.get("available_techs", [])
 
 
 @app.route('/api/reset', methods=['POST'])

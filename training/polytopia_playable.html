@@ -223,6 +223,10 @@
                 <span class="stat-label">Cities</span>
                 <span class="stat-value" id="statCities">0</span>
             </div>
+            <div style="margin-top: 12px;">
+                <span class="stat-label">Techs:</span>
+                <div id="statTechs" style="font-size: 0.85rem; color: #4ecdc4; margin-top: 4px;">-</div>
+            </div>
             <div class="controls">
                 <button class="btn-primary" id="btnEndTurn" disabled>End Turn</button>
             </div>
@@ -279,8 +283,12 @@
         const TERRAIN_COLORS = ['#1a1a1a', '#3498db', '#2980b9', '#27ae60', '#7f8c8d', '#229954', '#d4f1f4'];
         const TERRAIN_NAMES = ['None', 'Water', 'Ocean', 'Field', 'Mountain', 'Forest', 'Ice'];
         const PLAYER_COLORS = ['#95a5a6', '#e74c3c', '#3498db', '#f39c12', '#2ecc71'];
-        const UNIT_SYMBOLS = ['?', 'S', 'W', 'R', 'A', 'D', 'Sw', 'C', 'K', 'M', 'Sh', 'B', '?', 'Bo', 'G'];
-        const UNIT_NAMES = ['None', 'Scout', 'Warrior', 'Rider', 'Archer', 'Defender', 'Swordsman', 'Catapult', 'Knight', 'Mind Bender', 'Ship', 'Battleship', '?', 'Boat', 'Giant'];
+        // Unit symbols MUST match C# UnitData.Type enum order
+        const UNIT_SYMBOLS = ['?', 'S', 'W', 'R', 'K', 'D', 'Sh', 'B', 'C', 'A', 'M', 'Sw', 'G', '?', 'Bo'];
+        // Unit names MUST match C# UnitData.Type enum order
+        const UNIT_NAMES = ['None', 'Scout', 'Warrior', 'Rider', 'Knight', 'Defender', 'Ship', 'Battleship', 'Catapult', 'Archer', 'Mind Bender', 'Swordsman', 'Giant', 'Bunny', 'Boat'];
+        const RESOURCE_NAMES = ['None', 'Animal', 'Crop', 'Fish', 'Whale', 'Ore', 'Fruit'];
+        const RESOURCE_ICONS = ['', 'A', 'C', 'F', 'W', 'O', 'Fr'];
 
         let gameState = null;
         let validActions = {};
@@ -401,6 +409,10 @@
                 document.getElementById('statScore').textContent = obs.score.toLocaleString();
                 document.getElementById('statUnits').textContent = obs.num_units;
                 document.getElementById('statCities').textContent = obs.num_cities;
+
+                // Display researched techs
+                const techs = obs.available_techs || [];
+                document.getElementById('statTechs').textContent = techs.length > 0 ? techs.join(', ') : 'None';
             }
 
             // Update agent badge
@@ -474,35 +486,141 @@
                 }
             }
 
+            // Harvest options (hunting, fishing, fruit, etc.)
+            if (validActions.valid_harvests && validActions.valid_harvests.length > 0) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-weight: bold; color: #8B4513; margin: 8px 0 4px;';
+                header.textContent = 'Harvest Resources:';
+                list.appendChild(header);
+
+                for (const harvest of validActions.valid_harvests) {
+                    const item = document.createElement('div');
+                    item.className = 'action-item';
+                    item.textContent = `${harvest.improvement_type} (${harvest.resource_type}) at (${harvest.x}, ${harvest.y})`;
+                    item.onclick = () => doHarvest(harvest);
+                    list.appendChild(item);
+                }
+            }
+
+            // Capture options
+            if (validActions.valid_captures && validActions.valid_captures.length > 0) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-weight: bold; color: #e74c3c; margin: 8px 0 4px;';
+                header.textContent = 'Capture:';
+                list.appendChild(header);
+
+                for (const capture of validActions.valid_captures) {
+                    const item = document.createElement('div');
+                    item.className = 'action-item';
+                    item.textContent = `Capture village at (${capture.x}, ${capture.y})`;
+                    item.onclick = () => doCapture(capture);
+                    list.appendChild(item);
+                }
+            }
+
             if (list.children.length === 0) {
                 list.innerHTML = '<div style="color: #666;">No special actions available</div>';
             }
         }
 
         async function doResearch(techName) {
-            // Map tech name to index
+            // Map tech name to index - MUST match TechData.Type enum in C#
             const TECH_MAP = {
-                'climbing': 1, 'fishing': 2, 'hunting': 3, 'organization': 4,
-                'riding': 5, 'archery': 6, 'farming': 7, 'forestry': 8,
-                'free spirit': 9, 'meditation': 10, 'mining': 11, 'roads': 12,
-                'sailing': 13, 'shields': 14, 'whaling': 15, 'aquatism': 16,
-                'chivalry': 17, 'construction': 18, 'mathematics': 19, 'navigation': 20,
-                'philosophy': 21, 'smithery': 22, 'spiritualism': 23, 'trade': 24
+                'basic': 0,
+                'riding': 1,
+                'freespirit': 2,
+                'chivalry': 3,
+                'roads': 4,
+                'trade': 5,
+                'organization': 6,
+                'shields': 7,
+                'farming': 8,
+                'construction': 9,
+                'fishing': 10,
+                'whaling': 11,
+                'aquatism': 12,
+                'sailing': 13,
+                'navigation': 14,
+                'hunting': 15,
+                'forestry': 16,
+                'mathematics': 17,
+                'archery': 18,
+                'spiritualism': 19,
+                'climbing': 20,
+                'meditation': 21,
+                'philosophy': 22,
+                'mining': 23,
+                'smithery': 24,
+                'freediving': 25,
+                'diplomacy': 38
             };
-            const techIdx = TECH_MAP[techName.toLowerCase()] || 0;
+            const lowerName = techName.toLowerCase();
+            const techIdx = TECH_MAP[lowerName];
+            if (techIdx === undefined) {
+                console.error(`Unknown tech name: ${techName}`);
+                return;
+            }
             await executeAction(5, 0, 0, 0, techIdx, 0);
         }
 
         async function doTrain(train) {
-            const UNIT_MAP = { 'Scout': 1, 'Warrior': 2, 'Rider': 3, 'Archer': 4, 'Defender': 5 };
-            const unitIdx = UNIT_MAP[train.unit_type] || 2;
+            // Unit indices MUST match C# UnitData.Type enum
+            const UNIT_MAP = {
+                'Scout': 1,
+                'Warrior': 2,
+                'Rider': 3,
+                'Knight': 4,
+                'Defender': 5,
+                'Ship': 6,
+                'Battleship': 7,
+                'Catapult': 8,
+                'Archer': 9,
+                'MindBender': 10,
+                'Swordsman': 11,
+                'Giant': 12
+            };
+            const unitIdx = UNIT_MAP[train.unit_type];
+            if (unitIdx === undefined) {
+                console.error(`Unknown unit type: ${train.unit_type}`);
+                return;
+            }
             await executeAction(4, train.city_x, train.city_y, 0, unitIdx, 0);
         }
 
         async function doBuild(build) {
-            const IMP_MAP = { 'Farm': 5, 'Mine': 6, 'Port': 7, 'Sawmill': 8, 'Windmill': 9, 'Forge': 10, 'Customs House': 11 };
-            const impIdx = IMP_MAP[build.improvement_type] || 5;
+            // Improvement indices MUST match C# ImprovementData.Type enum
+            const IMP_MAP = {
+                'Farm': 5,
+                'Windmill': 6,
+                'Port': 8,
+                'LumberHut': 12,
+                'Sawmill': 13,
+                'Temple': 17,
+                'Mine': 21,
+                'Forge': 22,
+                'CustomsHouse': 4,
+                'Road': 3
+            };
+            const impIdx = IMP_MAP[build.improvement_type];
+            if (impIdx === undefined) {
+                console.error(`Unknown improvement type: ${build.improvement_type}`);
+                return;
+            }
             await executeAction(3, build.x, build.y, 0, impIdx, 0);
+        }
+
+        async function doHarvest(harvest) {
+            // Harvest uses ACTION_HARVEST = 14
+            const IMP_MAP = { 'Hunting': 9, 'Fishing': 7, 'HarvestFruit': 15, 'LumberHut': 12, 'Mine': 21 };
+            const impIdx = IMP_MAP[harvest.improvement_type] || 9;
+            await executeAction(14, harvest.x, harvest.y, 0, impIdx, 0);
+        }
+
+        async function doCapture(capture) {
+            // Capture uses ACTION_CAPTURE = 13
+            // Unit captures the tile it's standing on
+            const unitIdx = getUnitIndex(capture.unit_id);
+            await executeAction(13, capture.x, capture.y, unitIdx, 0, 0);
         }
 
         function handleCanvasClick(event) {
@@ -733,6 +851,18 @@
                 ctx.strokeRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
             }
 
+            // Resources (bottom-right corner) - only if explored and no improvement
+            if (tile.resource > 0 && tile.explored && tile.improvement_type === 0) {
+                ctx.font = `bold ${tileSize * 0.25}px Arial`;
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'bottom';
+
+                // Color based on resource type
+                const resourceColors = ['', '#8B4513', '#f1c40f', '#3498db', '#2c3e50', '#7f8c8d', '#e74c3c'];
+                ctx.fillStyle = resourceColors[tile.resource] || '#fff';
+                ctx.fillText(RESOURCE_ICONS[tile.resource] || '?', px + tileSize - 2, py + tileSize - 2);
+            }
+
             // Unit
             if (tile.has_unit && tile.explored) {
                 const centerX = px + tileSize/2;
@@ -766,30 +896,91 @@
 
             // Improvements
             if (tile.improvement_type > 0 && tile.explored) {
-                ctx.font = `bold ${tileSize * 0.25}px Arial`;
-                ctx.textAlign = 'left';
-                ctx.textBaseline = 'top';
-
                 if (tile.improvement_type === 1) {
-                    if (tile.owner === 0) {
-                        ctx.fillStyle = '#888';
-                        ctx.fillText('V', px + 2, py + 2);
-                    } else if (tile.is_capital) {
-                        ctx.fillStyle = '#f39c12';
-                        ctx.fillText('*', px + 2, py + 2);
+                    // CITY - draw prominently
+                    const level = tile.improvement_level || 1;
+                    const pop = tile.city_population || 0;
+                    const isCapital = tile.is_capital;
+                    const isVillage = tile.owner === 0;
+
+                    // City background - rounded rectangle
+                    const citySize = tileSize * 0.7;
+                    const cityX = px + (tileSize - citySize) / 2;
+                    const cityY = py + 2;
+
+                    if (isVillage) {
+                        // Neutral village - gray house
+                        ctx.fillStyle = '#555';
                     } else {
-                        ctx.fillStyle = PLAYER_COLORS[tile.owner] || '#f1c40f';
-                        ctx.fillText('C', px + 2, py + 2);
+                        // Player city - colored
+                        ctx.fillStyle = isCapital ? '#f39c12' : (PLAYER_COLORS[tile.owner] || '#888');
                     }
-                } else if (tile.improvement_type === 5) {
-                    ctx.fillStyle = '#8B4513';
-                    ctx.fillText('F', px + 2, py + 2);
-                } else if (tile.improvement_type === 6) {
-                    ctx.fillStyle = '#666';
-                    ctx.fillText('M', px + 2, py + 2);
+
+                    // Draw city shape (house-like)
+                    ctx.beginPath();
+                    ctx.moveTo(px + tileSize/2, py + 2);  // roof peak
+                    ctx.lineTo(px + tileSize - 4, py + 12);  // roof right
+                    ctx.lineTo(px + tileSize - 4, py + tileSize/2 - 2);  // wall right
+                    ctx.lineTo(px + 4, py + tileSize/2 - 2);  // wall left
+                    ctx.lineTo(px + 4, py + 12);  // roof left
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+
+                    // Level number
+                    if (!isVillage) {
+                        ctx.font = `bold ${tileSize * 0.3}px Arial`;
+                        ctx.fillStyle = '#fff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(level.toString(), px + tileSize/2, py + tileSize/3);
+
+                        // Population progress bar (below city icon, above unit if any)
+                        const popNeeded = level + 1;  // simplified: need level+1 pop to level up
+                        const barY = py + tileSize/2;
+                        const barWidth = tileSize - 8;
+                        const barHeight = 3;
+                        ctx.fillStyle = '#333';
+                        ctx.fillRect(px + 4, barY, barWidth, barHeight);
+                        ctx.fillStyle = '#9b59b6';  // purple for population
+                        ctx.fillRect(px + 4, barY, barWidth * Math.min(pop / popNeeded, 1), barHeight);
+                    }
+
+                    // Capital star
+                    if (isCapital) {
+                        ctx.font = `bold ${tileSize * 0.2}px Arial`;
+                        ctx.fillStyle = '#fff';
+                        ctx.textAlign = 'right';
+                        ctx.textBaseline = 'top';
+                        ctx.fillText('★', px + tileSize - 2, py + 1);
+                    }
                 } else {
-                    ctx.fillStyle = '#aaa';
-                    ctx.fillText('I', px + 2, py + 2);
+                    // Other improvements - small icon in corner
+                    ctx.font = `bold ${tileSize * 0.25}px Arial`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'top';
+
+                    if (tile.improvement_type === 5) {
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillText('F', px + 2, py + 2);  // Farm
+                    } else if (tile.improvement_type === 6) {
+                        ctx.fillStyle = '#666';
+                        ctx.fillText('M', px + 2, py + 2);  // Mine
+                    } else if (tile.improvement_type === 7) {
+                        ctx.fillStyle = '#3498db';
+                        ctx.fillText('P', px + 2, py + 2);  // Port
+                    } else if (tile.improvement_type === 8) {
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillText('S', px + 2, py + 2);  // Sawmill
+                    } else if (tile.improvement_type === 9) {
+                        ctx.fillStyle = '#ddd';
+                        ctx.fillText('W', px + 2, py + 2);  // Windmill
+                    } else {
+                        ctx.fillStyle = '#aaa';
+                        ctx.fillText('I', px + 2, py + 2);
+                    }
                 }
             }
         }
@@ -837,11 +1028,31 @@
                 html += `<em style="color: #95a5a6;">Unexplored</em>`;
             } else {
                 if (tile.owner > 0) html += `Owner: Player ${tile.owner}<br>`;
+
+                // City info
+                if (tile.improvement_type === 1) {
+                    if (tile.owner === 0) {
+                        html += `<strong style="color: #888;">Village</strong> (neutral)<br>`;
+                    } else {
+                        const level = tile.improvement_level || 1;
+                        const pop = tile.city_population || 0;
+                        const popNeeded = level + 1;
+                        html += `<strong style="color: ${tile.is_capital ? '#f39c12' : '#4ecdc4'};">`;
+                        html += tile.is_capital ? 'CAPITAL' : 'City';
+                        html += ` Lv.${level}</strong><br>`;
+                        html += `Population: ${pop}/${popNeeded}<br>`;
+                    }
+                }
+
                 if (tile.has_unit) {
                     html += `Unit: ${UNIT_NAMES[tile.unit_type]} (P${tile.unit_owner})<br>`;
                     html += `Health: ${tile.unit_health}/10<br>`;
                 }
-                if (tile.is_capital) html += `<strong style="color: #f39c12;">CAPITAL</strong><br>`;
+
+                // Show resource
+                if (tile.resource > 0) {
+                    html += `<span style="color: #f39c12;">Resource: ${RESOURCE_NAMES[tile.resource]}</span><br>`;
+                }
             }
 
             tooltip.innerHTML = html;

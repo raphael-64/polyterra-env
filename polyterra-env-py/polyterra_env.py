@@ -68,6 +68,7 @@ class PolyterraEnv(AECEnv):
     ACTION_DISBAND = 11
     ACTION_DESTROY = 12
     ACTION_CAPTURE = 13
+    ACTION_HARVEST = 14
     # ... more action types
 
     def __init__(
@@ -786,14 +787,29 @@ class PolyterraEnv(AECEnv):
                 }
             }
 
-        # CAPTURE - Capture enemy city
+        # CAPTURE - Capture enemy city/village
         elif action_type == self.ACTION_CAPTURE:
             return {
                 "command": "step",
                 "action_type": "capture",
                 "action_params": {
+                    "target_x": target_x,
+                    "target_y": target_y,
+                    "unit_id": unit_id if unit_id is not None else 0,
+                }
+            }
+
+        # HARVEST - Harvest resources (creates hidden improvements like hunting, fishing)
+        elif action_type == self.ACTION_HARVEST:
+            from game_data_mappings import IMPROVEMENT_IDX_TO_NAME
+            improvement_name = IMPROVEMENT_IDX_TO_NAME.get(param1, "Hunting")
+            return {
+                "command": "step",
+                "action_type": "harvest",
+                "action_params": {
                     "x": target_x,
                     "y": target_y,
+                    "improvement_type": improvement_name,
                 }
             }
 
