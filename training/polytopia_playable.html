@@ -208,8 +208,12 @@
                 <span class="stat-value" id="statTurn">0</span>
             </div>
             <div class="stat-row">
-                <span class="stat-label">Currency</span>
+                <span class="stat-label">⭐ Stars</span>
                 <span class="stat-value" id="statCurrency">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">📈 Income/Turn</span>
+                <span class="stat-value" id="statProduction">0</span>
             </div>
             <div class="stat-row">
                 <span class="stat-label">Score</span>
@@ -289,6 +293,8 @@
         const UNIT_NAMES = ['None', 'Scout', 'Warrior', 'Rider', 'Knight', 'Defender', 'Ship', 'Battleship', 'Catapult', 'Archer', 'Mind Bender', 'Swordsman', 'Giant', 'Bunny', 'Boat'];
         const RESOURCE_NAMES = ['None', 'Animal', 'Crop', 'Fish', 'Whale', 'Ore', 'Fruit'];
         const RESOURCE_ICONS = ['', 'A', 'C', 'F', 'W', 'O', 'Fr'];
+        // Improvement types MUST match game_data_mappings.py IMPROVEMENT_IDX_TO_NAME
+        const IMPROVEMENT_NAMES = ['None', 'City', 'Ruin', 'Road', 'CustomsHouse', 'Farm', 'Windmill', 'Fishing', 'Port', 'Hunting', 'ClearForest', 'BurnForest', 'LumberHut', 'Sawmill', 'GrowForest', 'HarvestFruit', 'WhaleHunting', 'Temple', 'ForestTemple', 'WaterTemple', 'MountainTemple', 'Mine', 'Forge'];
 
         let gameState = null;
         let validActions = {};
@@ -403,12 +409,24 @@
                     canvas.height = tileSize * mapSize;
                 }
 
+                // Calculate total production from cities
+                let totalProduction = 0;
+                const playerId = obs.player_id;
+                if (obs.tiles) {
+                    for (const tile of obs.tiles) {
+                        if (tile.improvement && tile.improvement.type === 'City' && tile.owner === playerId) {
+                            totalProduction += tile.improvement.production || 0;
+                        }
+                    }
+                }
+
                 // Update UI
                 document.getElementById('statTurn').textContent = obs.turn;
                 document.getElementById('statCurrency').textContent = obs.currency;
+                document.getElementById('statProduction').textContent = `+${totalProduction}`;
                 document.getElementById('statScore').textContent = obs.score.toLocaleString();
-                document.getElementById('statUnits').textContent = obs.num_units;
-                document.getElementById('statCities').textContent = obs.num_cities;
+                document.getElementById('statUnits').textContent = obs.num_units || '-';
+                document.getElementById('statCities').textContent = obs.cities || '-';
 
                 // Display researched techs
                 const techs = obs.available_techs || [];
@@ -442,14 +460,16 @@
             if (validActions.valid_research && validActions.valid_research.length > 0) {
                 const header = document.createElement('div');
                 header.style.cssText = 'font-weight: bold; color: #f39c12; margin: 8px 0 4px;';
-                header.textContent = 'Research (5 stars):';
+                header.textContent = 'Research:';
                 list.appendChild(header);
 
                 for (const tech of validActions.valid_research) {
+                    const techName = tech.tech_type || tech;  // Handle both old and new format
+                    const cost = tech.cost || 5;
                     const item = document.createElement('div');
                     item.className = 'action-item';
-                    item.textContent = tech;
-                    item.onclick = () => doResearch(tech);
+                    item.innerHTML = `${techName} <span style="color: #f1c40f;">⭐${cost}</span>`;
+                    item.onclick = () => doResearch(techName);
                     list.appendChild(item);
                 }
             }
@@ -462,9 +482,10 @@
                 list.appendChild(header);
 
                 for (const train of validActions.valid_trains) {
+                    const cost = train.cost || 0;
                     const item = document.createElement('div');
                     item.className = 'action-item';
-                    item.textContent = `${train.unit_type} at (${train.city_x}, ${train.city_y})`;
+                    item.innerHTML = `${train.unit_type} at (${train.city_x}, ${train.city_y}) <span style="color: #f1c40f;">⭐${cost}</span>`;
                     item.onclick = () => doTrain(train);
                     list.appendChild(item);
                 }
@@ -478,9 +499,10 @@
                 list.appendChild(header);
 
                 for (const build of validActions.valid_builds) {
+                    const cost = build.cost || 0;
                     const item = document.createElement('div');
                     item.className = 'action-item';
-                    item.textContent = `${build.improvement_type} at (${build.x}, ${build.y})`;
+                    item.innerHTML = `${build.improvement_type} at (${build.x}, ${build.y}) <span style="color: #f1c40f;">⭐${cost}</span>`;
                     item.onclick = () => doBuild(build);
                     list.appendChild(item);
                 }
@@ -494,9 +516,10 @@
                 list.appendChild(header);
 
                 for (const harvest of validActions.valid_harvests) {
+                    const cost = harvest.cost || 0;
                     const item = document.createElement('div');
                     item.className = 'action-item';
-                    item.textContent = `${harvest.improvement_type} (${harvest.resource_type}) at (${harvest.x}, ${harvest.y})`;
+                    item.innerHTML = `${harvest.improvement_type} (${harvest.resource_type}) at (${harvest.x}, ${harvest.y}) <span style="color: #f1c40f;">⭐${cost}</span>`;
                     item.onclick = () => doHarvest(harvest);
                     list.appendChild(item);
                 }
@@ -515,6 +538,30 @@
                     item.textContent = `Capture village at (${capture.x}, ${capture.y})`;
                     item.onclick = () => doCapture(capture);
                     list.appendChild(item);
+                }
+            }
+
+            // City Reward options (when city levels up)
+            if (validActions.valid_city_rewards && validActions.valid_city_rewards.length > 0) {
+                const header = document.createElement('div');
+                header.style.cssText = 'font-weight: bold; color: #FFD700; margin: 8px 0 4px; font-size: 1.1em;';
+                header.textContent = '⭐ CITY LEVEL UP! Choose Reward:';
+                list.appendChild(header);
+
+                for (const cityReward of validActions.valid_city_rewards) {
+                    const cityInfo = document.createElement('div');
+                    cityInfo.style.cssText = 'color: #aaa; font-size: 0.9em; margin-bottom: 4px;';
+                    cityInfo.textContent = `City at (${cityReward.x}, ${cityReward.y}) - Level ${cityReward.city_level}`;
+                    list.appendChild(cityInfo);
+
+                    cityReward.rewards.forEach((reward, idx) => {
+                        const item = document.createElement('div');
+                        item.className = 'action-item';
+                        item.style.cssText = 'background: rgba(255, 215, 0, 0.2); border-left: 3px solid #FFD700;';
+                        item.textContent = `🎁 ${reward}`;
+                        item.onclick = () => doCityReward(cityReward.x, cityReward.y, reward, idx);
+                        list.appendChild(item);
+                    });
                 }
             }
 
@@ -623,6 +670,12 @@
             await executeAction(13, capture.x, capture.y, unitIdx, 0, 0);
         }
 
+        async function doCityReward(x, y, rewardName, rewardIdx) {
+            // City reward uses ACTION_CITY_REWARD = 15
+            // param1 = reward index (0 or 1) into the available choices for this level
+            await executeAction(15, x, y, 0, rewardIdx, 0);
+        }
+
         function handleCanvasClick(event) {
             if (!gameState || !gameState.observation) return;
 
@@ -729,13 +782,27 @@
             } else if (selectedTile) {
                 const tile = selectedTile.tile;
                 title.textContent = `Tile (${selectedTile.x}, ${selectedTile.y})`;
-                let html = `Terrain: ${TERRAIN_NAMES[tile.terrain]}<br>`;
+                let html = `Terrain: ${TERRAIN_NAMES[tile.terrain] || tile.terrain}<br>`;
                 if (tile.owner > 0) html += `Owner: Player ${tile.owner}<br>`;
-                if (tile.has_unit) {
-                    html += `Enemy unit: ${UNIT_NAMES[tile.unit_type]}<br>`;
+                if (tile.has_resource) {
+                    html += `Resource: ${tile.resource}<br>`;
+                }
+                if (tile.unit) {
+                    html += `Unit: ${tile.unit.type} (HP: ${tile.unit.health})<br>`;
                 }
                 if (tile.improvement_type > 0) {
-                    html += `Has improvement<br>`;
+                    const impName = IMPROVEMENT_NAMES[tile.improvement_type] || `Type ${tile.improvement_type}`;
+                    html += `<span style="color: #3498db;">Improvement: ${impName}</span><br>`;
+                    if (tile.improvement_type === 1) {  // City
+                        const level = tile.improvement_level || 1;
+                        const pop = tile.city_population || 0;
+                        const prod = tile.city_production || 0;
+                        const popNeeded = level + 1;  // Need level+1 pop to level up
+                        html += `<span style="color: #f1c40f;">⭐ Production: ${prod}/turn</span><br>`;
+                        html += `Level: ${level}<br>`;
+                        html += `Population: ${pop}/${popNeeded} to level up<br>`;
+                        if (tile.is_capital) html += `<span style="color: #f39c12;">★ Capital</span><br>`;
+                    }
                 }
                 details.innerHTML = html;
                 actions.style.display = 'none';
@@ -958,6 +1025,7 @@
                     }
                 } else {
                     // Other improvements - small icon in corner
+                    // Indices from game_data_mappings: 5=Farm, 6=Windmill, 8=Port, 12=LumberHut, 13=Sawmill, 21=Mine, 22=Forge
                     ctx.font = `bold ${tileSize * 0.25}px Arial`;
                     ctx.textAlign = 'left';
                     ctx.textBaseline = 'top';
@@ -966,18 +1034,38 @@
                         ctx.fillStyle = '#8B4513';
                         ctx.fillText('F', px + 2, py + 2);  // Farm
                     } else if (tile.improvement_type === 6) {
-                        ctx.fillStyle = '#666';
-                        ctx.fillText('M', px + 2, py + 2);  // Mine
-                    } else if (tile.improvement_type === 7) {
-                        ctx.fillStyle = '#3498db';
-                        ctx.fillText('P', px + 2, py + 2);  // Port
-                    } else if (tile.improvement_type === 8) {
-                        ctx.fillStyle = '#8B4513';
-                        ctx.fillText('S', px + 2, py + 2);  // Sawmill
-                    } else if (tile.improvement_type === 9) {
                         ctx.fillStyle = '#ddd';
                         ctx.fillText('W', px + 2, py + 2);  // Windmill
-                    } else {
+                    } else if (tile.improvement_type === 8) {
+                        ctx.fillStyle = '#3498db';
+                        ctx.fillText('P', px + 2, py + 2);  // Port
+                    } else if (tile.improvement_type === 12) {
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillText('L', px + 2, py + 2);  // LumberHut
+                    } else if (tile.improvement_type === 13) {
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillText('S', px + 2, py + 2);  // Sawmill
+                    } else if (tile.improvement_type === 21) {
+                        ctx.fillStyle = '#666';
+                        ctx.fillText('M', px + 2, py + 2);  // Mine
+                    } else if (tile.improvement_type === 22) {
+                        ctx.fillStyle = '#ff4500';
+                        ctx.fillText('Fo', px + 2, py + 2);  // Forge
+                    } else if (tile.improvement_type === 17 || tile.improvement_type === 18 || tile.improvement_type === 19 || tile.improvement_type === 20) {
+                        ctx.fillStyle = '#f39c12';
+                        ctx.fillText('T', px + 2, py + 2);  // Temple variants
+                    } else if (tile.improvement_type === 4) {
+                        ctx.fillStyle = '#3498db';
+                        ctx.fillText('C', px + 2, py + 2);  // CustomsHouse
+                    } else if (tile.improvement_type === 3) {
+                        // Road - draw a line
+                        ctx.strokeStyle = '#8B4513';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(px, py + tileSize/2);
+                        ctx.lineTo(px + tileSize, py + tileSize/2);
+                        ctx.stroke();
+                    } else if (tile.improvement_type !== 2) {  // Skip ruins
                         ctx.fillStyle = '#aaa';
                         ctx.fillText('I', px + 2, py + 2);
                     }
@@ -1036,12 +1124,16 @@
                     } else {
                         const level = tile.improvement_level || 1;
                         const pop = tile.city_population || 0;
+                        const prod = tile.city_production || 0;
                         const popNeeded = level + 1;
                         html += `<strong style="color: ${tile.is_capital ? '#f39c12' : '#4ecdc4'};">`;
                         html += tile.is_capital ? 'CAPITAL' : 'City';
                         html += ` Lv.${level}</strong><br>`;
+                        html += `⭐ ${prod}/turn<br>`;
                         html += `Population: ${pop}/${popNeeded}<br>`;
                     }
+                } else if (tile.improvement_type > 0) {
+                    html += `${IMPROVEMENT_NAMES[tile.improvement_type] || 'Improvement'}<br>`;
                 }
 
                 if (tile.has_unit) {
@@ -1057,8 +1149,27 @@
 
             tooltip.innerHTML = html;
             tooltip.style.display = 'block';
-            tooltip.style.left = (event.pageX + 15) + 'px';
-            tooltip.style.top = (event.pageY + 15) + 'px';
+
+            // Position near cursor, but keep within viewport
+            const padding = 10;
+            const offsetX = 15;
+            const offsetY = 15;
+
+            // Get tooltip dimensions after setting content
+            const rect = tooltip.getBoundingClientRect();
+            let x = event.clientX + offsetX;
+            let y = event.clientY + offsetY;
+
+            // Keep tooltip within viewport
+            if (x + rect.width > window.innerWidth - padding) {
+                x = event.clientX - rect.width - offsetX;
+            }
+            if (y + rect.height > window.innerHeight - padding) {
+                y = event.clientY - rect.height - offsetY;
+            }
+
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
         }
 
         function showGameOver(winner) {

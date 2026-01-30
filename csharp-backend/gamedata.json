@@ -542,9 +542,7 @@
       "idx": 9,
       "cost": 3,
       "techUnlocks": [],
-      "improvementUnlocks": [
-        "lumberhut"
-      ],
+      "improvementUnlocks": [],
       "unitUnlocks": [],
       "abilityUnlocks": [],
       "taskUnlocks": [],
@@ -645,6 +643,7 @@
         "mathematics"
       ],
       "improvementUnlocks": [
+        "lumberhut",
         "sawmill"
       ],
       "unitUnlocks": [],
@@ -866,8 +865,8 @@
     "fishing": {
       "idx": 7,
       "hidden": true,
-      "cost": 0,
-      "improvementAbilities": [],
+      "cost": 2,
+      "improvementAbilities": ["consumed"],
       "rewards": [{"population": 1}],
       "terrainRequirements": [
         {
@@ -885,7 +884,7 @@
       "rewards": [{"population": 2}],
       "terrainRequirements": [
         {
-          "terrain": "ocean",
+          "terrain": "water",
           "resource": null
         }
       ],
@@ -894,8 +893,8 @@
     "hunting": {
       "idx": 9,
       "hidden": true,
-      "cost": 0,
-      "improvementAbilities": [],
+      "cost": 2,
+      "improvementAbilities": ["consumed"],
       "rewards": [{"population": 1}],
       "terrainRequirements": [
         {
@@ -961,8 +960,8 @@
     "harvestfruit": {
       "idx": 15,
       "hidden": true,
-      "cost": 0,
-      "improvementAbilities": [],
+      "cost": 2,
+      "improvementAbilities": ["consumed"],
       "rewards": [{"population": 1}],
       "terrainRequirements": [
         {

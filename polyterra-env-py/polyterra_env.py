@@ -69,6 +69,7 @@ class PolyterraEnv(AECEnv):
     ACTION_DESTROY = 12
     ACTION_CAPTURE = 13
     ACTION_HARVEST = 14
+    ACTION_CITY_REWARD = 15
     # ... more action types
 
     def __init__(
@@ -370,6 +371,7 @@ class PolyterraEnv(AECEnv):
                 "improvement_level": tile.get("improvement", {}).get("level", 0),
                 "is_capital": int(tile.get("improvement", {}).get("is_capital", False)),
                 "city_population": tile.get("improvement", {}).get("population", 0),
+                "city_production": tile.get("improvement", {}).get("production", 0),
 
                 # Unit
                 "has_unit": int(tile.get("unit") is not None),
@@ -439,12 +441,16 @@ class PolyterraEnv(AECEnv):
             "tribe": self._tribe_name_to_idx(raw_obs.get("tribe", "Imperius")),
             "num_cities": raw_obs.get("cities", 0),
             "num_kills": raw_obs.get("kills", 0),
-            "num_casualties": raw_obs.get("casualties", 0),
+            "num_casualties": raw_obs.get("casualties", 0),  # TODO: add to C# backend
+            "map_width": raw_obs.get("map_width", 16),
+            "map_height": raw_obs.get("map_height", 16),
             "available_techs": available_techs,
             "tiles": tiles,
             "units": units,
             "cities": cities,
             "opponents": opponents,
+            # Include valid actions so agent knows what it can do
+            "valid_actions": raw_obs.get("valid_actions", {}),
         }
 
         # Only include action mask if enabled
@@ -487,6 +493,26 @@ class PolyterraEnv(AECEnv):
         # Enable RESEARCH if there are valid techs
         if len(valid_actions.get('valid_research', [])) > 0:
             action_type_mask[5] = 1  # RESEARCH is action type 5
+
+        # Enable BUILD if there are valid builds
+        if len(valid_actions.get('valid_builds', [])) > 0:
+            action_type_mask[3] = 1  # BUILD is action type 3
+
+        # Enable TRAIN if there are valid trains
+        if len(valid_actions.get('valid_trains', [])) > 0:
+            action_type_mask[4] = 1  # TRAIN is action type 4
+
+        # Enable CAPTURE if there are valid captures
+        if len(valid_actions.get('valid_captures', [])) > 0:
+            action_type_mask[13] = 1  # CAPTURE is action type 13
+
+        # Enable HARVEST if there are valid harvests
+        if len(valid_actions.get('valid_harvests', [])) > 0:
+            action_type_mask[14] = 1  # HARVEST is action type 14
+
+        # Enable CITY_REWARD if there are pending city level up rewards to choose
+        if len(valid_actions.get('valid_city_rewards', [])) > 0:
+            action_type_mask[15] = 1  # CITY_REWARD is action type 15
 
         # If no actions are valid, allow END_TURN as fallback
         if np.sum(action_type_mask) == 0:
@@ -810,6 +836,39 @@ class PolyterraEnv(AECEnv):
                     "x": target_x,
                     "y": target_y,
                     "improvement_type": improvement_name,
+                }
+            }
+
+        # CITY_REWARD - Choose reward when city levels up
+        elif action_type == self.ACTION_CITY_REWARD:
+            # param1 = reward index (0 or 1 for the two choices at current level)
+            # Look up the actual reward name from valid_city_rewards in RAW observation
+            reward_name = "Workshop"  # Default fallback
+
+            # Get current agent's RAW observation to find valid rewards
+            # (valid_actions is in raw obs, not structured obs)
+            if self.agent_selection:
+                raw_obs = self._raw_observations.get(self.agent_selection, {})
+                valid_actions = raw_obs.get('valid_actions', {})
+                city_rewards = valid_actions.get('valid_city_rewards', [])
+
+                # Find the city reward at target coordinates
+                for cr in city_rewards:
+                    if cr.get('x') == target_x and cr.get('y') == target_y:
+                        rewards = cr.get('rewards', [])
+                        print(f"[DEBUG] City reward at ({target_x},{target_y}): rewards={rewards}, param1={param1}")
+                        if param1 < len(rewards):
+                            reward_name = rewards[param1]
+                            print(f"[DEBUG] Selected reward: {reward_name}")
+                        break
+
+            return {
+                "command": "step",
+                "action_type": "city_reward",
+                "action_params": {
+                    "x": target_x,
+                    "y": target_y,
+                    "reward": reward_name,
                 }
             }
 

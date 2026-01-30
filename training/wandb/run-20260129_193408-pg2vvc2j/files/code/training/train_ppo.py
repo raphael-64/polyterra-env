@@ -423,7 +423,7 @@ def main():
         project="polyterra",
         config=config,
         save_code=True,
-        monitor_gym=True,  # Auto-log gym metrics without tensorboard
+        sync_tensorboard=True,
     )
 
     # Create environment with reward shaping
@@ -448,6 +448,7 @@ def main():
         ent_coef=config["ent_coef"],
         vf_coef=config["vf_coef"],
         max_grad_norm=config["max_grad_norm"],
+        tensorboard_log=f"runs/{run.id}",
     )
 
     # Callbacks

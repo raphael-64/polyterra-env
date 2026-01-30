@@ -82,6 +82,7 @@ def serialize_observation(obs):
                 "improvement_type": int(t.get("improvement_type", 0)),
                 "improvement_level": int(t.get("improvement_level", 0)),
                 "city_population": int(t.get("city_population", 0)),
+                "city_production": int(t.get("city_production", 0)),
                 "is_capital": int(t.get("is_capital", 0)),
                 "resource": int(t.get("resource", 0)),
             }

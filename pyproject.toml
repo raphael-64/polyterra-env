@@ -8,4 +8,7 @@ dependencies = [
     "pettingzoo>=1.25.0",
     "flask>=3.0.0",
     "flask-cors>=4.0.0",
+    "wandb>=0.24.1",
+    "sb3-contrib>=2.7.1",
+    "tensorboard>=2.20.0",
 ]

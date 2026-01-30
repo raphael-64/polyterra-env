@@ -239,42 +239,78 @@ public class PolyterraEnvBridge
         if (command == null)
         {
             // Action was handled directly in ParseAction (e.g., harvest)
-            // Process any queued actions
-            ActionManagerUtils.PerformAllQueuedActions(gameState);
             success = true;
             error = null;
         }
         else
         {
-            success = actionManager.ExecuteCommand(command, out error);
-        }
+            int currencyBefore = player.Currency;
+            int prodBefore = 0;
+            int borderBefore = 0;
 
-        // Process any queued actions from the command (e.g., battle damage from attacks)
-        ActionManagerUtils.PerformAllQueuedActions(gameState);
-
-        // Auto-resolve any pending city level up triggers (choose PopulationGrowth by default)
-        // Check for triggers on ALL players, not just the current one
-        // NOTE: PlayerStates[0] is Player 1 (Id=1), so start at index 0
-        for (int pIdx = 0; pIdx < gameState.PlayerStates.Count; pIdx++)
-        {
-            var p = gameState.PlayerStates[pIdx];
-            while (gameState.TryGetPendingCommandTrigger(p.Id, out var trigger))
+            // Get city state before (if it's a city reward command)
+            if (command is CityRewardCommand cityRewardCmd)
             {
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Found pending trigger for player {p.Id}: type={trigger.type} at ({trigger.coordinates.X},{trigger.coordinates.Y})\n");
-                if (trigger.type == CommandTriggerType.CityLevelUp)
+                var cityTile = gameState.Map.GetTile(cityRewardCmd.Coordinates);
+                prodBefore = cityTile?.improvement?.production ?? 0;
+                borderBefore = cityTile?.improvement?.borderSize ?? 0;
+                bool hasImprovement = cityTile?.improvement != null;
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] BEFORE: tile exists={cityTile != null}, hasImprovement={hasImprovement}, production={prodBefore}, borderSize={borderBefore}, reward={cityRewardCmd.Reward}\n");
+            }
+
+            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Executing command: {command.GetType().Name}, Player currency before: {currencyBefore}\n");
+            success = actionManager.ExecuteCommand(command, out error);
+
+            int currencyAfter = player.Currency;
+            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Command executed, success={success}, error={error}, Currency: {currencyBefore} -> {currencyAfter} (delta={currencyAfter - currencyBefore})\n");
+
+            // Extra logging for city reward commands
+            if (command is CityRewardCommand cityRewardCmd2)
+            {
+                var cityTile = gameState.Map.GetTile(cityRewardCmd2.Coordinates);
+                int prodAfter = cityTile?.improvement?.production ?? 0;
+                int borderAfter = cityTile?.improvement?.borderSize ?? 0;
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] AFTER: production={prodBefore}->{prodAfter}, borderSize={borderBefore}->{borderAfter}\n");
+
+                // Count tiles owned by player near city
+                int ownedTiles = 0;
+                if (cityTile != null)
                 {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Auto-resolving CityLevelUp trigger\n");
-                    var rewardCmd = new CityRewardCommand(p.Id, CityReward.PopulationGrowth, trigger.coordinates);
-                    actionManager.ExecuteCommand(rewardCmd, out _);
-                    ActionManagerUtils.PerformAllQueuedActions(gameState);
+                    foreach (var t in gameState.Map.GetArea(cityTile.coordinates, borderAfter, true))
+                    {
+                        if (t.owner == player.Id) ownedTiles++;
+                    }
                 }
-                else
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Tiles owned in border area: {ownedTiles}\n");
+
+                // Log ActionStack after city reward to see if Explorer/Scout was added
+                if (gameState.ActionStack?.Count > 0)
                 {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Unknown trigger type, breaking\n");
-                    break;
+                    var actionTypes = string.Join(", ", gameState.ActionStack.Select(a => a.GetType().Name));
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] ActionStack after reward: {actionTypes}\n");
                 }
+
+                // Log explored tile count for Explorer reward tracking
+                int exploredCount = 0;
+                foreach (var tile in gameState.Map.Tiles)
+                {
+                    if (tile.GetExplored(player.Id)) exploredCount++;
+                }
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Total explored tiles: {exploredCount}\n");
             }
         }
+
+        // Process actions and triggers in a loop until both are empty
+        // IMPORTANT: PerformAllQueuedActions returns early if there are pending triggers,
+        // so we must resolve triggers first, then process actions, and repeat
+        File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Calling ProcessActionsAndTriggers, ActionStack count: {gameState.ActionStack?.Count ?? 0}\n");
+        ProcessActionsAndTriggers();
+        int exploredAfterProcessing = 0;
+        foreach (var tile in gameState.Map.Tiles)
+        {
+            if (tile.GetExplored(player.Id)) exploredAfterProcessing++;
+        }
+        File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After ProcessActionsAndTriggers, Player currency: {player.Currency}, ActionStack count: {gameState.ActionStack?.Count ?? 0}, Explored tiles: {exploredAfterProcessing}\n");
 
         if (!success)
         {
@@ -475,67 +511,63 @@ public class PolyterraEnvBridge
 
             case "harvest":
             {
-                // Harvesting resources creates a hidden improvement (hunting, fishing, etc.)
-                // Hidden improvements bypass normal BuildCommand validation
+                // Harvest = BuildCommand for hidden improvements with Consumed ability
+                // They get built, give rewards, and immediately disappear
                 int x = GetIntParam(actionParams, "x");
                 int y = GetIntParam(actionParams, "y");
                 string improvementTypeStr = GetStringParam(actionParams, "improvement_type");
 
                 if (!Enum.TryParse<ImprovementData.Type>(improvementTypeStr, true, out var improvementType))
-                {
                     throw new Exception($"Invalid improvement type: {improvementTypeStr}");
-                }
 
                 var coords = new WorldCoordinates((ushort)x, (ushort)y);
 
-                // Validate manually for hidden improvements
+                // Validate using game logic
                 if (!gameState.GameLogicData.TryGetData(improvementType, out var impData))
-                {
                     throw new Exception($"Unknown improvement: {improvementTypeStr}");
-                }
-
-                // Check if player has this unlocked
                 if (!gameState.GameLogicData.IsUnlocked(improvementType, player))
-                {
                     throw new Exception($"Improvement not unlocked: {improvementTypeStr}");
-                }
+                if (!player.CanAfford(impData))
+                    throw new Exception($"Not enough currency: need {impData.cost}, have {player.Currency}");
 
-                // Check if the tile has the right resource
-                var tile = gameState.Map.GetTile(coords);
-                if (tile == null)
+                // Use BuildCommand via ExecuteCommands (bypasses CanBuild check for hidden improvements)
+                var buildCmd = new BuildCommand(player.Id, improvementType, coords);
+                actionManager.ExecuteCommands(new List<CommandBase> { buildCmd });
+                return null;
+            }
+
+            case "city_reward":
+            {
+                // Choose a reward when city levels up
+                int x = GetIntParam(actionParams, "x");
+                int y = GetIntParam(actionParams, "y");
+                string rewardStr = GetStringParam(actionParams, "reward");
+
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Received: x={x}, y={y}, reward={rewardStr}, player={player.Id}, currency BEFORE={player.Currency}\n");
+
+                if (!Enum.TryParse<CityReward>(rewardStr, true, out var reward))
+                    throw new Exception($"Invalid city reward: {rewardStr}");
+
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Parsed reward enum: {reward} (value={(int)reward})\n");
+
+                var coords = new WorldCoordinates((ushort)x, (ushort)y);
+
+                // Validate that there's actually a pending CityLevelUp trigger at these coordinates
+                if (!gameState.TryGetPendingCommandTrigger(player.Id, out var trigger) ||
+                    trigger.type != CommandTriggerType.CityLevelUp ||
+                    trigger.coordinates != coords)
                 {
-                    throw new Exception("Invalid tile coordinates");
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] ERROR: No pending trigger at ({x}, {y})\n");
+                    throw new Exception($"No pending city level up at ({x}, {y})");
                 }
 
-                var resource = tile.GetResource(gameState, player.Id);
-                if (resource == null)
-                {
-                    throw new Exception("No resource on this tile");
-                }
+                // Get city tile info for debugging
+                var cityTile = gameState.Map.GetTile(coords);
+                int cityLevel = cityTile?.improvement?.level ?? -1;
+                int cityProd = cityTile?.improvement?.production ?? 0;
 
-                // Verify this improvement is for this resource
-                var expectedImprovement = gameState.GameLogicData.GetImprovementForResource(resource.type);
-                if (expectedImprovement == null || expectedImprovement.type != improvementType)
-                {
-                    throw new Exception($"Wrong improvement for resource {resource.type}");
-                }
-
-                // Debug: Check ruling city
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[Harvest] Tile ({x},{y}) rulingCity: ({tile.rulingCityCoordinates.X},{tile.rulingCityCoordinates.Y}), owner: {tile.owner}\n");
-
-                var rulingCityTile = gameState.Map.GetTile(tile.rulingCityCoordinates);
-                if (rulingCityTile?.improvement != null)
-                {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[Harvest] RulingCity level={rulingCityTile.improvement.level}, xp={rulingCityTile.improvement.xp}, pop={rulingCityTile.improvement.population}\n");
-                }
-                else
-                {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[Harvest] No ruling city improvement found!\n");
-                }
-
-                // Directly add the build action to bypass hidden improvement check
-                gameState.ActionStack.Add(new BuildAction(player.Id, improvementType, coords, deductCost: false));
-                return null;  // Signal that we handled this ourselves
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] City at ({x},{y}): level={cityLevel}, production={cityProd}, Creating CityRewardCommand for {reward}\n");
+                return new CityRewardCommand(player.Id, reward, coords);
             }
 
             default:
@@ -648,6 +680,7 @@ public class PolyterraEnvBridge
             ["available_techs"] = available_techs,
             ["cities"] = player.cities,
             ["kills"] = player.kills,
+            ["casualties"] = player.casualties,
 
             // Map dimensions
             ["map_width"] = gameState.Map.Width,
@@ -717,7 +750,8 @@ public class PolyterraEnvBridge
                 if (tile.improvement.type == ImprovementData.Type.City)
                 {
                     impData["population"] = tile.improvement.population;
-                    impData["production"] = tile.improvement.production;
+                    // Use CalculateWork to get actual stars per turn (not just raw production value)
+                    impData["production"] = tile.CalculateWork(gameState);
                     impData["is_capital"] = tile.improvement.founder == tile.improvement.owner && tile.improvement.founded == 1;
                     impData["border_size"] = tile.improvement.borderSize;
                     impData["name"] = tile.improvement.name ?? "";
@@ -858,11 +892,90 @@ public class PolyterraEnvBridge
         return activePlayers <= 1;
     }
 
+    /// <summary>
+    /// Process all pending actions and triggers in a loop until both are empty.
+    /// IMPORTANT: PerformAllQueuedActions returns early if there are pending triggers,
+    /// so we must resolve triggers first, then process actions, and repeat.
+    /// NOTE: CityLevelUp triggers for the current player are NOT auto-resolved -
+    /// they are exposed as valid_city_rewards for the agent to choose.
+    /// </summary>
+    private void ProcessActionsAndTriggers()
+    {
+        int maxIterations = 100; // Safety limit
+        int iterations = 0;
+        byte currentPlayer = gameState.CurrentPlayer;
+
+        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Starting, currentPlayer={currentPlayer}\n");
+
+        while (iterations++ < maxIterations)
+        {
+            bool hadTrigger = false;
+            bool hadAction = false;
+
+            // Resolve pending triggers, but NOT CityLevelUp for current player (agent chooses those)
+            for (int pIdx = 0; pIdx < gameState.PlayerStates.Count; pIdx++)
+            {
+                var p = gameState.PlayerStates[pIdx];
+                if (gameState.TryGetPendingCommandTrigger(p.Id, out var trigger))
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Found trigger for player {p.Id}: {trigger.type}\n");
+
+                    // Skip CityLevelUp for current player - let agent choose reward
+                    if (trigger.type == CommandTriggerType.CityLevelUp && p.Id == currentPlayer)
+                    {
+                        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Skipping CityLevelUp for current player\n");
+                        continue;
+                    }
+
+                    // Auto-resolve other triggers (or CityLevelUp for other players)
+                    if (CommandTriggerUtils.TryGetTriggerCommand(gameState, out var triggerCmd))
+                    {
+                        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Auto-resolving trigger with {triggerCmd.GetType().Name}\n");
+                        actionManager.ExecuteCommand(triggerCmd, out _);
+                        hadTrigger = true;
+                    }
+                    else
+                    {
+                        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Failed to get trigger command\n");
+                        break;
+                    }
+                }
+            }
+
+            // Process any queued actions
+            // Note: Won't process if current player has pending CityLevelUp trigger
+            if (gameState.ActionStack != null && gameState.ActionStack.Count > 0)
+            {
+                // Log what's in the ActionStack
+                var actionTypes = string.Join(", ", gameState.ActionStack.Select(a => a.GetType().Name));
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] ActionStack has {gameState.ActionStack.Count} items: {actionTypes}\n");
+
+                // Check if current player has a CityLevelUp trigger blocking action processing
+                if (gameState.TryGetPendingCommandTrigger(currentPlayer, out var blockingTrigger) &&
+                    blockingTrigger.type == CommandTriggerType.CityLevelUp)
+                {
+                    File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Blocked by CityLevelUp trigger, breaking\n");
+                    // Actions are blocked until agent chooses city reward
+                    break;
+                }
+
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Calling PerformAllQueuedActions\n");
+                ActionManagerUtils.PerformAllQueuedActions(gameState);
+                hadAction = true;
+            }
+
+            if (!hadTrigger && !hadAction)
+            {
+                File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] No trigger or action, breaking\n");
+                break;
+            }
+        }
+
+        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Done after {iterations} iterations\n");
+    }
+
     private Dictionary<string, object> GetValidActions(PlayerState player)
     {
-        // Return information about valid actions for the current player
-        // This includes: valid unit moves, attacks, builds, etc.
-
         var validActions = new Dictionary<string, object>();
         var validMoves = new List<Dictionary<string, object>>();
         var validAttacks = new List<Dictionary<string, object>>();
@@ -870,71 +983,89 @@ public class PolyterraEnvBridge
         var validTrains = new List<Dictionary<string, object>>();
         var validCaptures = new List<Dictionary<string, object>>();
         var validHarvests = new List<Dictionary<string, object>>();
+        var validUnitActions = new List<Dictionary<string, object>>();
+        var validCityRewards = new List<Dictionary<string, object>>();
 
-        // Check if player can end turn (almost always valid)
-        var endTurnCmd = new EndTurnCommand(player.Id);
-        validActions["can_end_turn"] = endTurnCmd.IsValid(gameState);
-
-        // Check valid research options using game logic's GetUnlockableTech
-        var validTechs = new List<string>();
-
-        // Debug: Log player's available techs
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] Player {player.Id} available techs: {string.Join(", ", player.availableTech.Select(t => $"{t}({(int)t})"))}\n");
-
-        // Debug: Log tech data for each available tech
-        foreach (var availTech in player.availableTech)
+        // Check for pending CityLevelUp triggers - agent must choose reward before other actions
+        if (gameState.TryGetPendingCommandTrigger(player.Id, out var trigger) &&
+            trigger.type == CommandTriggerType.CityLevelUp)
         {
-            if (gameState.GameLogicData.TryGetData(availTech, out var techData))
+            // Get available rewards for this level
+            var tile = gameState.Map.GetTile(trigger.coordinates);
+            if (tile?.improvement != null &&
+                gameState.GameLogicData.TryGetData(ImprovementData.Type.City, out var cityData))
             {
-                var unlockNames = string.Join(", ", techData.techUnlocks.Select(t => $"{t.type}(idx={t.idx})"));
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] Tech {availTech} (idx={techData.idx}) unlocks: [{unlockNames}]\n");
+                var rewards = cityData.GetCityRewardsForLevel(tile.improvement.level - 1);
+                var rewardStrings = new List<string>();
+                foreach (var reward in rewards)
+                {
+                    rewardStrings.Add(reward.ToString());
+                }
+
+                validCityRewards.Add(new Dictionary<string, object>
+                {
+                    ["x"] = trigger.coordinates.X,
+                    ["y"] = trigger.coordinates.Y,
+                    ["city_level"] = tile.improvement.level,
+                    ["rewards"] = rewardStrings
+                });
             }
+
+            // When there's a pending city reward, other actions are blocked
+            validActions["can_end_turn"] = false;
+            validActions["valid_research"] = new List<string>();
+            validActions["valid_moves"] = validMoves;
+            validActions["valid_attacks"] = validAttacks;
+            validActions["valid_builds"] = validBuilds;
+            validActions["valid_trains"] = validTrains;
+            validActions["valid_captures"] = validCaptures;
+            validActions["valid_harvests"] = validHarvests;
+            validActions["valid_unit_actions"] = validUnitActions;
+            validActions["valid_city_rewards"] = validCityRewards;
+            return validActions;
         }
 
+        // End turn check
+        validActions["can_end_turn"] = new EndTurnCommand(player.Id).IsValid(gameState);
+
+        // Valid research using game logic
+        var validTechs = new List<Dictionary<string, object>>();
         var unlockableTechs = gameState.GameLogicData.GetUnlockableTech(player);
         if (unlockableTechs != null)
         {
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] GetUnlockableTech returned: {string.Join(", ", unlockableTechs.Select(t => $"{t.type}(idx={t.idx})"))}\n");
-
             foreach (var tech in unlockableTechs)
             {
-                var researchCmd = new ResearchCommand(player.Id, tech.type);
-                if (researchCmd.IsValid(gameState, out string validationError))
+                if (new ResearchCommand(player.Id, tech.type).IsValid(gameState))
                 {
-                    validTechs.Add(tech.type.ToString());
-                }
-                else
-                {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[ValidActions] Tech {tech.type} NOT valid: {validationError}\n");
+                    // Use proper tech cost calculation: 4 + tier + (cities-1)*tier
+                    int cost = gameState.GameLogicData.GetTechPrice(tech, player, gameState);
+                    validTechs.Add(new Dictionary<string, object>
+                    {
+                        ["tech_type"] = tech.type.ToString(),
+                        ["cost"] = cost
+                    });
                 }
             }
         }
         validActions["valid_research"] = validTechs;
 
-        // Iterate through all tiles to find valid actions
+        // Iterate tiles for all actions
         for (int i = 0; i < gameState.Map.Tiles.Length; i++)
         {
             var tile = gameState.Map.Tiles[i];
 
-            // Check unit actions if this tile has a player's unit
+            // Unit actions using game logic methods
             if (tile.unit != null && tile.unit.owner == player.Id)
             {
                 var unit = tile.unit;
-
-                // Get unit data for range/movement info
                 if (!gameState.GameLogicData.TryGetData(unit.type, out var unitData))
-                {
                     continue;
-                }
 
-                // Use game engine's GetMovementOptions for efficient move checking
+                // Moves using GetMovementOptions
                 var movement = unit.GetMovement(gameState);
-                var movementOptions = unit.GetMovementOptions(gameState, movement);
-
-                foreach (var targetCoords in movementOptions)
+                foreach (var targetCoords in unit.GetMovementOptions(gameState, movement))
                 {
-                    var moveCmd = new MoveCommand(player.Id, unit, targetCoords);
-                    if (moveCmd.IsValid(gameState))
+                    if (new MoveCommand(player.Id, unit, targetCoords).IsValid(gameState))
                     {
                         validMoves.Add(new Dictionary<string, object>
                         {
@@ -947,12 +1078,10 @@ public class PolyterraEnvBridge
                     }
                 }
 
-                // Use game engine's GetAttackOptions for efficient attack checking
-                var attackOptions = unit.GetAttackOptions(gameState, unitData.GetRange());
-                foreach (var targetCoords in attackOptions)
+                // Attacks using GetAttackOptions
+                foreach (var targetCoords in unit.GetAttackOptions(gameState, unitData.GetRange()))
                 {
-                    var attackCmd = new AttackCommand(player.Id, unit, targetCoords);
-                    if (attackCmd.IsValid(gameState))
+                    if (new AttackCommand(player.Id, unit, targetCoords).IsValid(gameState))
                     {
                         validAttacks.Add(new Dictionary<string, object>
                         {
@@ -965,129 +1094,80 @@ public class PolyterraEnvBridge
                     }
                 }
 
-                // Check if unit can recover
-                var recoverCmd = new RecoverCommand(player.Id, tile.coordinates);
-                if (recoverCmd.IsValid(gameState))
+                // Unit actions using CommandUtils.GetUnitActions (capture, recover, promote, etc.)
+                foreach (var cmd in CommandUtils.GetUnitActions(gameState, player, tile))
                 {
-                    validActions[$"can_recover_{unit.id}"] = true;
-                }
-
-                // Check if unit can promote
-                var promoteCmd = new PromoteCommand(player.Id, tile.coordinates);
-                if (promoteCmd.IsValid(gameState))
-                {
-                    validActions[$"can_promote_{unit.id}"] = true;
-                }
-
-                // Check if unit can capture a city/village (unit must be ON the tile)
-                var captureCmd = new CaptureCommand(player.Id, unit.id, tile.coordinates);
-                if (captureCmd.IsValid(gameState))
-                {
-                    validCaptures.Add(new Dictionary<string, object>
+                    var actionInfo = new Dictionary<string, object>
                     {
                         ["unit_id"] = unit.id,
                         ["x"] = tile.coordinates.X,
-                        ["y"] = tile.coordinates.Y
+                        ["y"] = tile.coordinates.Y,
+                        ["action_type"] = cmd.GetType().Name.Replace("Command", "").ToLower()
+                    };
+
+                    if (cmd is CaptureCommand)
+                        validCaptures.Add(actionInfo);
+                    else
+                        validUnitActions.Add(actionInfo);
+                }
+            }
+
+            // Train actions using CommandUtils.GetTrainableUnits
+            foreach (var trainCmd in CommandUtils.GetTrainableUnits(gameState, player, tile))
+            {
+                int cost = 0;
+                if (gameState.GameLogicData.TryGetData(trainCmd.Type, out var unitData))
+                    cost = unitData.cost;
+
+                validTrains.Add(new Dictionary<string, object>
+                {
+                    ["city_x"] = tile.coordinates.X,
+                    ["city_y"] = tile.coordinates.Y,
+                    ["unit_type"] = trainCmd.Type.ToString(),
+                    ["cost"] = cost
+                });
+            }
+
+            // Build actions using CommandUtils.GetBuildableImprovements
+            foreach (var cmd in CommandUtils.GetBuildableImprovements(gameState, player, tile))
+            {
+                if (cmd is BuildCommand buildCmd)
+                {
+                    int cost = 0;
+                    if (gameState.GameLogicData.TryGetData(buildCmd.Type, out var impData))
+                        cost = impData.cost;
+
+                    validBuilds.Add(new Dictionary<string, object>
+                    {
+                        ["x"] = tile.coordinates.X,
+                        ["y"] = tile.coordinates.Y,
+                        ["improvement_type"] = buildCmd.Type.ToString(),
+                        ["cost"] = cost
                     });
                 }
             }
 
-            // Check build/train actions if this tile has a city owned by player
-            if (tile.owner == player.Id &&
-                tile.improvement != null &&
-                tile.improvement.type == Polytopia.Data.ImprovementData.Type.City)
+            // Harvest actions for hidden improvements (fruit, animals, fish)
+            // These bypass CanBuild since they're hidden, so we check manually
+            if (tile.owner == player.Id && tile.improvement == null)
             {
-                // Debug: Log player's available techs and their unit unlocks
-                var unlockedTechList = gameState.GameLogicData.GetUnlockedTech(player);
-                if (unlockedTechList != null)
+                var resource = tile.GetResource(gameState, player.Id);
+                if (resource != null)
                 {
-                    foreach (var tech in unlockedTechList)
+                    var harvestImprovement = gameState.GameLogicData.GetImprovementForResource(resource.type);
+                    if (harvestImprovement != null &&
+                        harvestImprovement.hidden &&
+                        gameState.GameLogicData.IsUnlocked(harvestImprovement.type, player) &&
+                        player.CanAfford(harvestImprovement))
                     {
-                        var unitUnlockNames = string.Join(", ", tech.unitUnlocks.Select(u => u.type.ToString()));
-                        if (tech.unitUnlocks.Count > 0)
+                        validHarvests.Add(new Dictionary<string, object>
                         {
-                            File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitUnlocks] Tech {tech.type} (idx={tech.idx}) unlocks units: [{unitUnlockNames}]\n");
-                        }
-                    }
-                }
-
-                // Check valid unit training using game logic's GetUnlockedUnits
-                var unlockedUnits = gameState.GameLogicData.GetUnlockedUnits(player, gameState, false);
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitUnlocks] GetUnlockedUnits returned: {string.Join(", ", unlockedUnits?.Select(u => u.type.ToString()) ?? new[] {"null"})}\n");
-
-                if (unlockedUnits != null)
-                {
-                    foreach (var unitData in unlockedUnits)
-                    {
-                        var trainCmd = new TrainCommand(player.Id, unitData.type, tile.coordinates);
-                        if (trainCmd.IsValid(gameState))
-                        {
-                            validTrains.Add(new Dictionary<string, object>
-                            {
-                                ["city_x"] = tile.coordinates.X,
-                                ["city_y"] = tile.coordinates.Y,
-                                ["unit_type"] = unitData.type.ToString()
-                            });
-                        }
-                    }
-                }
-
-                // Check valid building constructions using game logic's GetUnlockedImprovements
-                var unlockedImprovements = gameState.GameLogicData.GetUnlockedImprovements(player);
-                if (unlockedImprovements != null)
-                {
-                    // Check each surrounding tile for valid builds
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        for (int dy = -1; dy <= 1; dy++)
-                        {
-                            int targetX = tile.coordinates.X + dx;
-                            int targetY = tile.coordinates.Y + dy;
-
-                            if (targetX >= 0 && targetX < gameState.Map.Width &&
-                                targetY >= 0 && targetY < gameState.Map.Height)
-                            {
-                                var targetCoords = new WorldCoordinates((ushort)targetX, (ushort)targetY);
-
-                                foreach (var improvementData in unlockedImprovements)
-                                {
-                                    var buildCmd = new BuildCommand(player.Id, improvementData.type, targetCoords);
-                                    if (buildCmd.IsValid(gameState))
-                                    {
-                                        validBuilds.Add(new Dictionary<string, object>
-                                        {
-                                            ["x"] = targetX,
-                                            ["y"] = targetY,
-                                            ["improvement_type"] = improvementData.type.ToString()
-                                        });
-                                    }
-                                }
-
-                                // Check for harvestable resources (hidden improvements like hunting, fishing, etc.)
-                                var targetTile = gameState.Map.GetTile(targetCoords);
-                                if (targetTile != null && targetTile.improvement == null)
-                                {
-                                    var resource = targetTile.GetResource(gameState, player.Id);
-                                    if (resource != null)
-                                    {
-                                        // Get the improvement that harvests this resource
-                                        var harvestImprovement = gameState.GameLogicData.GetImprovementForResource(resource.type);
-                                        if (harvestImprovement != null &&
-                                            harvestImprovement.hidden &&
-                                            gameState.GameLogicData.IsUnlocked(harvestImprovement.type, player))
-                                        {
-                                            validHarvests.Add(new Dictionary<string, object>
-                                            {
-                                                ["x"] = targetX,
-                                                ["y"] = targetY,
-                                                ["resource_type"] = resource.type.ToString(),
-                                                ["improvement_type"] = harvestImprovement.type.ToString()
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                            ["x"] = tile.coordinates.X,
+                            ["y"] = tile.coordinates.Y,
+                            ["resource_type"] = resource.type.ToString(),
+                            ["improvement_type"] = harvestImprovement.type.ToString(),
+                            ["cost"] = harvestImprovement.cost
+                        });
                     }
                 }
             }
@@ -1099,6 +1179,8 @@ public class PolyterraEnvBridge
         validActions["valid_trains"] = validTrains;
         validActions["valid_captures"] = validCaptures;
         validActions["valid_harvests"] = validHarvests;
+        validActions["valid_unit_actions"] = validUnitActions;
+        validActions["valid_city_rewards"] = validCityRewards;  // Empty when no pending trigger
 
         return validActions;
     }
