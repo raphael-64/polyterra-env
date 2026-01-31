@@ -1,4 +1,5 @@
 README.md
+game_data_mappings.py
 polyterra_env.py
 setup.py
 polyterra_env.egg-info/PKG-INFO
@@ -6,3 +7,13 @@ polyterra_env.egg-info/SOURCES.txt
 polyterra_env.egg-info/dependency_links.txt
 polyterra_env.egg-info/requires.txt
 polyterra_env.egg-info/top_level.txt
+tests/test_action_mask.py
+tests/test_action_space.py
+tests/test_action_space_comprehensive.py
+tests/test_all_action_types.py
+tests/test_basic.py
+tests/test_complete_workflow.py
+tests/test_debug_agents.py
+tests/test_debug_unit_state.py
+tests/test_debug_valid_actions.py
+tests/test_training_quick.py

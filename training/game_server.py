@@ -101,6 +101,97 @@ def get_valid_actions():
     return raw_obs.get("valid_actions", {})
 
 
+def find_action_index(action_type, x=0, y=0, unit_idx=0, param1=0, param2=0):
+    """
+    Find the index in valid_actions_list that matches the given action parameters.
+
+    Action type mappings:
+    0 = END_TURN
+    1 = MOVE (unit_idx is unit_id, x/y is target)
+    2 = ATTACK (unit_idx is unit_id, x/y is target)
+    3 = BUILD (x/y is location, param1 is improvement type)
+    4 = TRAIN (x/y is city location, param1 is unit type)
+    5 = RESEARCH (param1 is tech index)
+    13 = CAPTURE (unit_idx is unit_id, x/y is city location)
+    14 = HARVEST (x/y is tile location)
+    15 = CITY_REWARD (x/y is city location, param1 is reward choice)
+
+    Returns action index or -1 if not found.
+    """
+    global env, current_agent
+    if env is None or current_agent is None:
+        return -1
+
+    obs = env.observe(current_agent)
+    valid_list = obs.get("valid_actions_list", [])
+    valid_mask = obs.get("valid_actions_mask", [])
+
+    for idx, action_dict in enumerate(valid_list):
+        if valid_mask[idx] == 0:
+            continue  # Skip padding
+
+        act_type = action_dict.get("action_type", -1)
+
+        # END_TURN
+        if action_type == 0 and act_type == 0:
+            return idx
+
+        # MOVE - match unit_id and target
+        elif action_type == 1 and act_type == 1:
+            if (action_dict.get("unit_id") == unit_idx and
+                action_dict.get("to_x") == x and
+                action_dict.get("to_y") == y):
+                return idx
+
+        # ATTACK - match unit_id and target
+        elif action_type == 2 and act_type == 2:
+            if (action_dict.get("unit_id") == unit_idx and
+                action_dict.get("target_x") == x and
+                action_dict.get("target_y") == y):
+                return idx
+
+        # BUILD - match location and improvement type
+        elif action_type == 3 and act_type == 3:
+            if (action_dict.get("x") == x and
+                action_dict.get("y") == y and
+                action_dict.get("improvement_type") == param1):
+                return idx
+
+        # TRAIN - match city location and unit type
+        elif action_type == 4 and act_type == 4:
+            if (action_dict.get("city_x") == x and
+                action_dict.get("city_y") == y and
+                action_dict.get("unit_type") == param1):
+                return idx
+
+        # RESEARCH - match tech index
+        elif action_type == 5 and act_type == 5:
+            if action_dict.get("tech_idx") == param1:
+                return idx
+
+        # CAPTURE - match unit_id and target
+        elif action_type == 13 and act_type == 13:
+            if (action_dict.get("unit_id") == unit_idx and
+                action_dict.get("city_x") == x and
+                action_dict.get("city_y") == y):
+                return idx
+
+        # HARVEST - match location
+        elif action_type == 14 and act_type == 14:
+            if (action_dict.get("x") == x and
+                action_dict.get("y") == y):
+                return idx
+
+        # CITY_REWARD - match city and reward choice
+        elif action_type == 15 and act_type == 15:
+            if (action_dict.get("city_x") == x and
+                action_dict.get("city_y") == y and
+                action_dict.get("reward_type") == param1):
+                return idx
+
+    return -1  # Not found
+
+
 def get_raw_techs():
     """Get tech names from raw observation."""
     global env, current_agent
@@ -182,7 +273,7 @@ def execute_action():
     if not data:
         return jsonify({"error": "No action data provided"}), 400
 
-    # Parse action
+    # Parse action parameters
     action_type = data.get('action_type', 0)
     x = data.get('x', 0)
     y = data.get('y', 0)
@@ -190,11 +281,22 @@ def execute_action():
     param1 = data.get('param1', 0)
     param2 = data.get('param2', 0)
 
-    action = (action_type, x, y, unit_idx, param1, param2)
+    # Find matching action index in valid_actions_list
+    action_idx = find_action_index(action_type, x, y, unit_idx, param1, param2)
 
-    # Execute action
+    if action_idx == -1:
+        return jsonify({
+            "success": False,
+            "error": f"No matching action found for type={action_type}, x={x}, y={y}, unit={unit_idx}, p1={param1}",
+            "agent": current_agent,
+            "observation": serialize_observation(env.observe(current_agent)) if current_agent else {},
+            "valid_actions": get_valid_actions(),
+            "game_over": False,
+        })
+
+    # Execute action using integer index
     prev_agent = current_agent
-    env.step(action)
+    env.step(action_idx)
 
     reward = env.rewards.get(prev_agent, 0)
     info = env.infos.get(prev_agent, {})
@@ -240,11 +342,18 @@ def end_turn():
     if env is None:
         return jsonify({"error": "No game in progress"}), 400
 
-    # End turn action
-    action = (0, 0, 0, 0, 0, 0)
+    # Find END_TURN action index (action_type=0)
+    action_idx = find_action_index(action_type=0)
+
+    if action_idx == -1:
+        return jsonify({
+            "success": False,
+            "error": "END_TURN action not available",
+            "agent": current_agent,
+        }), 400
 
     prev_agent = current_agent
-    env.step(action)
+    env.step(action_idx)
 
     reward = env.rewards.get(prev_agent, 0)
     current_agent = env.agent_selection

@@ -1039,11 +1039,30 @@ public class PolyterraEnvBridge
                 {
                     // Use proper tech cost calculation: 4 + tier + (cities-1)*tier
                     int cost = gameState.GameLogicData.GetTechPrice(tech, player, gameState);
-                    validTechs.Add(new Dictionary<string, object>
+
+                    var techInfo = new Dictionary<string, object>
                     {
                         ["tech_type"] = tech.type.ToString(),
                         ["cost"] = cost
-                    });
+                    };
+
+                    // Add what this tech unlocks
+                    var unlocksUnits = new List<string>();
+                    foreach (var unit in tech.unitUnlocks)
+                        unlocksUnits.Add(unit.type.ToString());
+                    techInfo["unlocks_units"] = unlocksUnits;
+
+                    var unlocksImprovements = new List<string>();
+                    foreach (var imp in tech.improvementUnlocks)
+                        unlocksImprovements.Add(imp.type.ToString());
+                    techInfo["unlocks_improvements"] = unlocksImprovements;
+
+                    var unlocksTechs = new List<string>();
+                    foreach (var nextTech in tech.techUnlocks)
+                        unlocksTechs.Add(nextTech.type.ToString());
+                    techInfo["unlocks_techs"] = unlocksTechs;
+
+                    validTechs.Add(techInfo);
                 }
             }
         }
@@ -1083,14 +1102,29 @@ public class PolyterraEnvBridge
                 {
                     if (new AttackCommand(player.Id, unit, targetCoords).IsValid(gameState))
                     {
-                        validAttacks.Add(new Dictionary<string, object>
+                        var targetTile = gameState.Map.GetTile(targetCoords);
+                        var attackInfo = new Dictionary<string, object>
                         {
                             ["unit_id"] = unit.id,
                             ["from_x"] = tile.coordinates.X,
                             ["from_y"] = tile.coordinates.Y,
                             ["target_x"] = targetCoords.X,
                             ["target_y"] = targetCoords.Y
-                        });
+                        };
+
+                        // Add battle predictions if target has a unit
+                        if (targetTile?.unit != null)
+                        {
+                            var battleResults = BattleHelpers.GetBattleResults(gameState, unit, targetTile.unit);
+                            attackInfo["expected_damage"] = battleResults.attackDamage;
+                            attackInfo["expected_retaliation"] = battleResults.retaliationDamage;
+                            attackInfo["will_kill"] = targetTile.unit.health <= battleResults.attackDamage;
+                            attackInfo["will_die"] = battleResults.retaliationDamage >= 0 && unit.health <= battleResults.retaliationDamage;
+                            attackInfo["target_health"] = targetTile.unit.health;
+                            attackInfo["attacker_health"] = unit.health;
+                        }
+
+                        validAttacks.Add(attackInfo);
                     }
                 }
 
@@ -1115,17 +1149,24 @@ public class PolyterraEnvBridge
             // Train actions using CommandUtils.GetTrainableUnits
             foreach (var trainCmd in CommandUtils.GetTrainableUnits(gameState, player, tile))
             {
-                int cost = 0;
-                if (gameState.GameLogicData.TryGetData(trainCmd.Type, out var unitData))
-                    cost = unitData.cost;
-
-                validTrains.Add(new Dictionary<string, object>
+                var trainInfo = new Dictionary<string, object>
                 {
                     ["city_x"] = tile.coordinates.X,
                     ["city_y"] = tile.coordinates.Y,
-                    ["unit_type"] = trainCmd.Type.ToString(),
-                    ["cost"] = cost
-                });
+                    ["unit_type"] = trainCmd.Type.ToString()
+                };
+
+                if (gameState.GameLogicData.TryGetData(trainCmd.Type, out var trainUnitData))
+                {
+                    trainInfo["cost"] = trainUnitData.cost;
+                    trainInfo["health"] = trainUnitData.health;
+                    trainInfo["attack"] = trainUnitData.attack;
+                    trainInfo["defence"] = trainUnitData.defence;
+                    trainInfo["range"] = trainUnitData.GetRange();
+                    trainInfo["movement"] = trainUnitData.movement;
+                }
+
+                validTrains.Add(trainInfo);
             }
 
             // Build actions using CommandUtils.GetBuildableImprovements
@@ -1133,17 +1174,21 @@ public class PolyterraEnvBridge
             {
                 if (cmd is BuildCommand buildCmd)
                 {
-                    int cost = 0;
-                    if (gameState.GameLogicData.TryGetData(buildCmd.Type, out var impData))
-                        cost = impData.cost;
-
-                    validBuilds.Add(new Dictionary<string, object>
+                    var buildInfo = new Dictionary<string, object>
                     {
                         ["x"] = tile.coordinates.X,
                         ["y"] = tile.coordinates.Y,
-                        ["improvement_type"] = buildCmd.Type.ToString(),
-                        ["cost"] = cost
-                    });
+                        ["improvement_type"] = buildCmd.Type.ToString()
+                    };
+
+                    if (gameState.GameLogicData.TryGetData(buildCmd.Type, out var impData))
+                    {
+                        buildInfo["cost"] = impData.cost;
+                        buildInfo["population_reward"] = impData.GetPopulationReward();
+                        buildInfo["currency_reward"] = impData.GetCurrencyReward();
+                    }
+
+                    validBuilds.Add(buildInfo);
                 }
             }
 
@@ -1166,7 +1211,9 @@ public class PolyterraEnvBridge
                             ["y"] = tile.coordinates.Y,
                             ["resource_type"] = resource.type.ToString(),
                             ["improvement_type"] = harvestImprovement.type.ToString(),
-                            ["cost"] = harvestImprovement.cost
+                            ["cost"] = harvestImprovement.cost,
+                            ["population_reward"] = harvestImprovement.GetPopulationReward(),
+                            ["currency_reward"] = harvestImprovement.GetCurrencyReward()
                         });
                     }
                 }

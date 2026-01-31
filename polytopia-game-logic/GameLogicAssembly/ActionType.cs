@@ -8,17 +8,22 @@ public enum ActionType : ushort
 	Train = 5,
 	Move = 6,
 	RuleArea = 7,
+	// what is rulearea
 	Research = 8,
 	DestroyImprovement = 9,
 	DisbandUnit = 10,
 	CityReward = 11,
+	// implementation is fucked in playable
 	Meet = 12,
 	Promote = 13,
 	ExamineRuins = 14,
 	EndTurn = 15,
 	Upgrade = 16,
+
+	// ice is not in free version
 	FreezeArea = 17,
 	BreakIce = 18,
+
 	BuildRoad = 19,
 	CaptureCity = 20,
 	CityLevelUp = 21,
@@ -52,20 +57,30 @@ public enum ActionType : ushort
 	WipePlayer = 49,
 	CreateResource = 50,
 	DestroyResource = 51,
+
+	// what is this
 	ModifyScore = 52,
 	PassPlayer = 53,
+
+	// why are these actions, shouldnt they be just outcomes of certain game states
 	ConnectCity = 54,
 	DisconnectCity = 55,
 	ChangeCityConnection = 56,
+
 	BreakIceArea = 57,
 	ExpandCity = 58,
+
+	// again shouldnt this be a game logic implementation not an action
 	DecreaseScore = 59,
 	EndMatch = 60,
 	WipePlayerEnd = 61,
 	EndCommand = 62,
 	Poison = 63,
+
+	// which is responsible for fruit/game? 
 	Eat = 64,
 	HarvestImprovement = 66,
+	
 	Boost = 68,
 	BoostOthers = 69,
 	Explode = 70,

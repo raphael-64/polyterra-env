@@ -5,7 +5,7 @@ setup(
     version="0.1.0",
     description="PettingZoo environment for Polytopia game",
     author="Polyterra Team",
-    py_modules=["polyterra_env"],
+    py_modules=["polyterra_env", "game_data_mappings"],
     install_requires=[
         "pettingzoo>=1.24.0",
         "gymnasium>=0.29.0",

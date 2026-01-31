@@ -19,9 +19,19 @@ from wandb.integration.sb3 import WandbCallback
 
 
 class SimplePolyterraWrapper(gym.Env):
-    """Wrapper: AEC -> Gym with flat obs and reward shaping."""
+    """
+    Wrapper: AEC -> Gym with simplified action space.
 
-    MAX_ACTIONS = 512
+    Instead of 512 raw action indices, we use 8 ACTION TYPES:
+    0: END_TURN, 1: MOVE, 2: ATTACK, 3: BUILD, 4: TRAIN, 5: RESEARCH, 6: HARVEST, 7: OTHER
+
+    The env picks the best/random target for that action type.
+    This makes the action space consistent and learnable.
+    """
+
+    # Simplified action types
+    ACTION_TYPES = ["end_turn", "move", "attack", "build", "train", "research", "harvest", "other"]
+    NUM_ACTION_TYPES = 8
 
     def __init__(self, num_players=2, max_steps=200, map_size=15, reward_shaping=True):
         super().__init__()
@@ -29,7 +39,7 @@ class SimplePolyterraWrapper(gym.Env):
         self.max_steps = max_steps
         self.map_size = map_size
         self.steps = 0
-        self.our_agent = None  # We play as player_0
+        self.our_agent = None
         self.reward_shaping = reward_shaping
 
         # State tracking for reward shaping
@@ -37,11 +47,13 @@ class SimplePolyterraWrapper(gym.Env):
 
         self.aec_env.reset()
 
-        self.action_space = spaces.Discrete(self.MAX_ACTIONS)
-        obs_dim = 10 + map_size * map_size * 4
+        # Simplified action space: just pick action TYPE
+        self.action_space = spaces.Discrete(self.NUM_ACTION_TYPES)
+        obs_dim = 10 + map_size * map_size * 4 + self.NUM_ACTION_TYPES  # +8 for action availability
         self.observation_space = spaces.Box(-1.0, 1.0, shape=(obs_dim,), dtype=np.float32)
 
-        self._action_mask = np.ones(self.MAX_ACTIONS, dtype=np.int8)
+        self._action_mask = np.ones(self.NUM_ACTION_TYPES, dtype=np.int8)
+        self._valid_actions_by_type = {}  # Cache: type -> list of action indices
         self._last_action_type = None
 
     def _flatten_obs(self, obs):
@@ -143,10 +155,18 @@ class SimplePolyterraWrapper(gym.Env):
 
     def step(self, action):
         self.steps += 1
+        action_idx = int(action)
+
+        # Get action type before stepping (for reward shaping)
+        pre_obs = self.aec_env.observe(self.our_agent) if self.our_agent in self.aec_env.agents else {}
+        valid_actions_list = pre_obs.get('valid_actions_list', [])
+        action_dict = valid_actions_list[action_idx] if action_idx < len(valid_actions_list) else {}
+        action_type = action_dict.get('type', 'invalid') if isinstance(action_dict, dict) else 'invalid'
+        self._last_action_type = action_type
 
         # Our turn
-        self.aec_env.step(int(action))
-        reward = self.aec_env.rewards.get(self.our_agent, 0)
+        self.aec_env.step(action_idx)
+        base_reward = self.aec_env.rewards.get(self.our_agent, 0)
 
         # Let opponent play (random valid action)
         while self.aec_env.agent_selection != self.our_agent and self.aec_env.agents:
@@ -169,13 +189,18 @@ class SimplePolyterraWrapper(gym.Env):
         truncated = self.aec_env.truncations.get(self.our_agent, False) or self.steps >= self.max_steps
 
         if self.our_agent in self.aec_env.agents:
-            obs = self.aec_env.observe(self.our_agent)
-            flat_obs = self._flatten_obs(obs)
+            curr_obs = self.aec_env.observe(self.our_agent)
+            flat_obs = self._flatten_obs(curr_obs)
         else:
+            curr_obs = {}
             flat_obs = np.zeros(self.observation_space.shape, dtype=np.float32)
             terminated = True
 
-        return flat_obs, reward, terminated, truncated, {}
+        # Apply reward shaping
+        shaped_reward = self._compute_shaped_reward(base_reward, self.prev_state, curr_obs, action_type)
+        self.prev_state = curr_obs  # Update for next step
+
+        return flat_obs, shaped_reward, terminated, truncated, {"action_type": action_type}
 
     def action_masks(self):
         return self._action_mask

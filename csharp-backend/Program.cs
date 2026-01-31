@@ -19,20 +19,26 @@ return 0;
 static void RunEnvServer()
 {
     var bridge = new PolyterraEnvBridge(maxTurns: 100);
+    int commandCount = 0;
+    int errorCount = 0;
 
     Console.Error.WriteLine("Polyterra Environment Server started");
     Console.Error.WriteLine("Ready to accept JSON commands on stdin");
 
     while (true)
     {
+        string line = null;
         try
         {
-            string line = Console.ReadLine();
+            line = Console.ReadLine();
 
             if (string.IsNullOrEmpty(line))
             {
+                Console.Error.WriteLine($"Server received EOF after {commandCount} commands ({errorCount} errors)");
                 break;
             }
+
+            commandCount++;
 
             // Process command
             string response = bridge.ProcessCommand(line);
@@ -43,11 +49,24 @@ static void RunEnvServer()
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
-            Console.Error.WriteLine(ex.StackTrace);
-            break;
+            errorCount++;
+            // Log the error with context but DON'T crash - return error response instead
+            Console.Error.WriteLine($"[ERROR #{errorCount}] Command #{commandCount}: {ex.Message}");
+            Console.Error.WriteLine($"  Input: {(line?.Length > 200 ? line.Substring(0, 200) + "..." : line)}");
+            Console.Error.WriteLine($"  Stack: {ex.StackTrace}");
+
+            // Return error response to Python instead of crashing
+            var errorResponse = new System.Text.Json.Nodes.JsonObject
+            {
+                ["error"] = ex.Message,
+                ["error_type"] = ex.GetType().Name,
+                ["command_count"] = commandCount
+            };
+            Console.WriteLine(errorResponse.ToJsonString());
+            Console.Out.Flush();
+            // CONTINUE instead of break - don't crash the server!
         }
     }
 
-    Console.Error.WriteLine("Environment Server shutting down");
+    Console.Error.WriteLine($"Environment Server shutting down after {commandCount} commands ({errorCount} errors)");
 }
