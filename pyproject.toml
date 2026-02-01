@@ -11,5 +11,13 @@ dependencies = [
     "wandb>=0.24.1",
     "sb3-contrib>=2.7.1",
     "tensorboard>=2.20.0",
-    "ray>=2.53.0",
+    "ray[rllib]>=2.53.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["polyterra_env*"]

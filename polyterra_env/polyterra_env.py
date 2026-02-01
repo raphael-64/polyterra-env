@@ -14,7 +14,7 @@ from pettingzoo.utils.agent_selector import agent_selector
 from pettingzoo.utils import wrappers
 
 # Import game data mappings
-from game_data_mappings import (
+from .game_data_mappings import (
     TERRAIN_NAME_TO_IDX, RESOURCE_NAME_TO_IDX,
     UNIT_NAME_TO_IDX, IMPROVEMENT_NAME_TO_IDX,
     TECH_NAME_TO_IDX, TRIBE_NAME_TO_IDX
@@ -904,7 +904,7 @@ class PolyterraEnv(AECEnv):
 
         # BUILD - Requires improvement type, coordinates
         elif action_type == self.ACTION_BUILD:
-            from game_data_mappings import IMPROVEMENT_IDX_TO_NAME
+            from .game_data_mappings import IMPROVEMENT_IDX_TO_NAME
             improvement_name = IMPROVEMENT_IDX_TO_NAME.get(param1, "farm")
 
             return {
@@ -919,7 +919,7 @@ class PolyterraEnv(AECEnv):
 
         # TRAIN - Requires unit type, coordinates (city location)
         elif action_type == self.ACTION_TRAIN:
-            from game_data_mappings import UNIT_IDX_TO_NAME
+            from .game_data_mappings import UNIT_IDX_TO_NAME
             unit_type_name = UNIT_IDX_TO_NAME.get(param1, "warrior")
 
             return {
@@ -934,7 +934,7 @@ class PolyterraEnv(AECEnv):
 
         # RESEARCH - Requires tech type
         elif action_type == self.ACTION_RESEARCH:
-            from game_data_mappings import TECH_IDX_TO_NAME
+            from .game_data_mappings import TECH_IDX_TO_NAME
             tech_name = TECH_IDX_TO_NAME.get(param1, "riding")
 
             return {
@@ -947,7 +947,7 @@ class PolyterraEnv(AECEnv):
 
         # UPGRADE - Requires unit type, coordinates
         elif action_type == self.ACTION_UPGRADE:
-            from game_data_mappings import UNIT_IDX_TO_NAME
+            from .game_data_mappings import UNIT_IDX_TO_NAME
             unit_type_name = UNIT_IDX_TO_NAME.get(param1, "knight")
 
             return {
@@ -1059,7 +1059,7 @@ class PolyterraEnv(AECEnv):
 
         # HARVEST - Harvest resources (creates hidden improvements like hunting, fishing)
         elif action_type == self.ACTION_HARVEST:
-            from game_data_mappings import IMPROVEMENT_IDX_TO_NAME
+            from .game_data_mappings import IMPROVEMENT_IDX_TO_NAME
             improvement_name = IMPROVEMENT_IDX_TO_NAME.get(param1, "Hunting")
             return {
                 "command": "step",

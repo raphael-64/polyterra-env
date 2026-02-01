@@ -9,11 +9,16 @@ This project provides a Python RL environment that communicates with a C# game e
 ## Project Structure
 
 ```
-polyterra-env/
-├── polyterra-env-py/          # Python PettingZoo environment
+polyterra-entity-encoder/
+├── polyterra_env/             # Python PettingZoo environment (package)
+│   ├── __init__.py            # Package exports
 │   ├── polyterra_env.py       # Main environment class
 │   ├── game_data_mappings.py  # Game data index mappings
 │   └── tests/                 # Test suite
+├── training/                  # RL training scripts
+│   ├── train_rllib.py         # RLlib self-play training
+│   ├── train_entity_encoder.py # Entity encoder (attention-based) training
+│   └── train_ppo.py           # Stable-Baselines3 training
 ├── csharp-backend/            # C# game engine bridge
 │   ├── PolyterraEnvBridge.cs  # RL environment bridge
 │   ├── Program.cs             # Server entry point
@@ -21,6 +26,7 @@ polyterra-env/
 ├── polytopia-game-logic/      # Decompiled game logic (dependencies)
 │   ├── GameLogicAssembly/     # Core game logic
 │   └── PolytopiaBackendBase/  # Backend helpers
+├── pyproject.toml             # Python project config (uv/pip)
 └── README.md                  # Documentation
 ```
 
@@ -28,23 +34,48 @@ polyterra-env/
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.12+
 - .NET 8.0 SDK
-- PettingZoo, Gymnasium, NumPy
+- [uv](https://github.com/astral-sh/uv) (recommended) or pip
 
 ### Setup
 
-1. **Install Python dependencies:**
-```bash
-cd polyterra-env-py
-pip install pettingzoo gymnasium numpy
-```
-
-2. **Build C# backend:**
+1. **Build C# backend (required first!):**
 ```bash
 cd csharp-backend
 dotnet build
 ```
+
+Verify the DLL exists:
+```bash
+ls bin/Debug/net8.0/PolyterraBackend.dll
+```
+
+2. **Install Python dependencies:**
+
+Using uv (recommended):
+```bash
+uv sync
+```
+
+Or using pip:
+```bash
+pip install -e .
+```
+
+3. **Verify installation:**
+```bash
+uv run python -c "from polyterra_env import PolyterraEnv; print('OK')"
+```
+
+### Troubleshooting
+
+**BrokenPipeError**: The C# backend isn't running. Rebuild it:
+```bash
+cd csharp-backend && dotnet build
+```
+
+**ModuleNotFoundError**: Run `uv sync` to install dependencies.
 
 ## Usage
 
