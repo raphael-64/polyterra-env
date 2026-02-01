@@ -245,10 +245,29 @@ class EntityEncoderModel(TorchModelV2, nn.Module):
         self._state_embedding = state_emb
 
         # Embed actions using features from observation
+        # Only embed valid actions for efficiency (invalid ones get -inf scores anyway)
         if action_features is not None:
             if not isinstance(action_features, torch.Tensor):
                 action_features = torch.tensor(action_features, dtype=torch.long, device=device)
-            action_embs = self._embed_action_features(action_features)
+
+            # Find max valid actions in batch to avoid processing all 512
+            if action_mask is not None:
+                if not isinstance(action_mask, torch.Tensor):
+                    action_mask = torch.tensor(action_mask, dtype=torch.float32, device=device)
+                max_valid = int(action_mask.sum(dim=-1).max().item()) + 1
+                max_valid = min(max_valid, MAX_ACTIONS)
+            else:
+                max_valid = MAX_ACTIONS
+
+            # Only embed valid actions
+            action_embs_valid = self._embed_action_features(action_features[:, :max_valid])
+
+            # Pad back to MAX_ACTIONS for consistent shapes
+            if max_valid < MAX_ACTIONS:
+                padding = torch.zeros(batch_size, MAX_ACTIONS - max_valid, self.action_embed_dim, device=device)
+                action_embs = torch.cat([action_embs_valid, padding], dim=1)
+            else:
+                action_embs = action_embs_valid
         else:
             # Fallback: use learned embeddings for action indices
             action_indices = torch.arange(MAX_ACTIONS, device=device).unsqueeze(0).expand(batch_size, -1)
@@ -401,42 +420,31 @@ class EntityEncoderEnv(MultiAgentEnv):
         Returns array of shape (MAX_ACTIONS, ACTION_FEATURES) where features are:
         [action_type, unit_type, tech_idx, improve_idx, pos_x, pos_y]
         """
+        n = min(len(action_list), MAX_ACTIONS)
         features = np.zeros((MAX_ACTIONS, self.ACTION_FEATURES), dtype=np.int32)
 
-        for i, action in enumerate(action_list[:MAX_ACTIONS]):
-            action_type = action.get("action_type", -1)
+        # Process only valid actions (not all 512)
+        for i in range(n):
+            a = action_list[i]
+            action_type = a.get("action_type", -1)
             if action_type < 0:
-                continue  # Invalid/padding action
+                continue
 
-            # Action type (clamped)
-            features[i, 0] = min(action_type, NUM_ACTION_TYPES - 1)
+            unit_type = a.get("unit_type") or ""
+            tech_name = a.get("tech_name") or ""
+            improve_name = a.get("improvement_type") or ""
 
-            # Unit type
-            unit_type = action.get("unit_type", None)
-            if unit_type and isinstance(unit_type, str):
-                features[i, 1] = UNIT_NAME_TO_IDX.get(unit_type.lower(), 0)
+            x = a.get("to_x") or a.get("x") or a.get("target_x") or a.get("city_x")
+            y = a.get("to_y") or a.get("y") or a.get("target_y") or a.get("city_y")
 
-            # Tech
-            tech_name = action.get("tech_name", None)
-            if tech_name and isinstance(tech_name, str):
-                features[i, 2] = TECH_NAME_TO_IDX.get(tech_name.lower(), 0)
-
-            # Improvement
-            improve_name = action.get("improvement_type", None)
-            if improve_name and isinstance(improve_name, str):
-                features[i, 3] = IMPROVEMENT_NAME_TO_IDX.get(improve_name.lower(), 0)
-
-            # Position (try various field names)
-            x = action.get("to_x", action.get("x", action.get("target_x", action.get("city_x", -1))))
-            y = action.get("to_y", action.get("y", action.get("target_y", action.get("city_y", -1))))
-
-            if x is None or x < 0:
-                x = MAP_SIZE  # "no position" sentinel
-            if y is None or y < 0:
-                y = MAP_SIZE
-
-            features[i, 4] = min(x, MAP_SIZE)
-            features[i, 5] = min(y, MAP_SIZE)
+            features[i] = [
+                min(action_type, NUM_ACTION_TYPES - 1),
+                UNIT_NAME_TO_IDX.get(str(unit_type).lower(), 0),
+                TECH_NAME_TO_IDX.get(str(tech_name).lower(), 0),
+                IMPROVEMENT_NAME_TO_IDX.get(str(improve_name).lower(), 0),
+                min(x if x and x >= 0 else MAP_SIZE, MAP_SIZE),
+                min(y if y and y >= 0 else MAP_SIZE, MAP_SIZE),
+            ]
 
         return features
 
@@ -649,26 +657,37 @@ def main():
     for i in range(training_iterations):
         result = algo.train()
 
-        # Extract metrics
-        env_runners = result.get("env_runners", {})
-        mean_reward = env_runners.get("episode_return_mean", 0)
-        if mean_reward == 0 or mean_reward is None:
-            mean_reward = env_runners.get("episode_reward_mean", 0)
-        episodes = env_runners.get("num_episodes", 0)
+        # Extract metrics - old API stack uses different keys
+        # Try new API first, then fall back to old API
+        env_runners = result.get("env_runners", result.get("sampler_results", {}))
+        mean_reward = (
+            env_runners.get("episode_return_mean") or
+            env_runners.get("episode_reward_mean") or
+            result.get("episode_reward_mean", 0)
+        )
+        episodes = env_runners.get("num_episodes", result.get("episodes_total", 0))
         timesteps = result.get(
             "num_env_steps_sampled_lifetime",
-            env_runners.get("num_env_steps_sampled_lifetime", 0)
+            result.get("timesteps_total", 0)
         )
 
-        # Learner metrics
+        # Learner metrics - old API uses "info/learner/shared_policy"
         learners = result.get("learners", {})
         policy_stats = learners.get("shared_policy", {})
-        policy_loss = policy_stats.get("policy_loss", 0)
-        vf_loss = policy_stats.get("vf_loss", 0)
-        entropy = policy_stats.get("entropy", 0)
+
+        # Old API path: result["info"]["learner"]["shared_policy"]["learner_stats"]
+        if not policy_stats:
+            info = result.get("info", {})
+            learner_info = info.get("learner", {})
+            policy_info = learner_info.get("shared_policy", {})
+            policy_stats = policy_info.get("learner_stats", policy_info)
+
+        policy_loss = policy_stats.get("policy_loss", policy_stats.get("cur_policy_loss", 0))
+        vf_loss = policy_stats.get("vf_loss", policy_stats.get("cur_vf_loss", 0))
+        entropy = policy_stats.get("entropy", policy_stats.get("cur_entropy", 0))
         vf_explained_var = policy_stats.get("vf_explained_var", 0)
-        total_loss = policy_stats.get("total_loss", 0)
-        kl_loss = policy_stats.get("mean_kl_loss", 0)
+        total_loss = policy_stats.get("total_loss", policy_loss + vf_loss)
+        kl_loss = policy_stats.get("mean_kl_loss", policy_stats.get("kl", 0))
 
         print(
             f"Iter {i+1:3d} | reward: {mean_reward:7.2f} | episodes: {int(episodes):3d} | "
@@ -678,18 +697,28 @@ def main():
 
         # Log to W&B
         if HAS_WANDB:
+            reward_min = (
+                env_runners.get("episode_return_min") or
+                env_runners.get("episode_reward_min") or
+                result.get("episode_reward_min", 0)
+            )
+            reward_max = (
+                env_runners.get("episode_return_max") or
+                env_runners.get("episode_reward_max") or
+                result.get("episode_reward_max", 0)
+            )
             wandb.log({
-                "reward/mean": mean_reward,
-                "reward/min": env_runners.get("episode_return_min", 0),
-                "reward/max": env_runners.get("episode_return_max", 0),
-                "episodes": episodes,
-                "timesteps": timesteps,
-                "train/policy_loss": policy_loss,
-                "train/vf_loss": vf_loss,
-                "train/total_loss": total_loss,
-                "train/entropy": entropy,
-                "train/kl_loss": kl_loss,
-                "train/vf_explained_var": vf_explained_var,
+                "reward/mean": mean_reward or 0,
+                "reward/min": reward_min or 0,
+                "reward/max": reward_max or 0,
+                "episodes": episodes or 0,
+                "timesteps": timesteps or 0,
+                "train/policy_loss": policy_loss or 0,
+                "train/vf_loss": vf_loss or 0,
+                "train/total_loss": total_loss or 0,
+                "train/entropy": entropy or 0,
+                "train/kl_loss": kl_loss or 0,
+                "train/vf_explained_var": vf_explained_var or 0,
                 "iteration": i + 1,
             })
 
