@@ -27,18 +27,18 @@ echo "  python: $PYTHON_VERSION"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Step 1: Create venv and install Python deps
+# Step 1: Install Python deps with uv
 echo ""
 echo "=== Step 1: Python environment ==="
-if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv .venv
+
+if ! command -v uv &> /dev/null; then
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 
-source .venv/bin/activate
 echo "Installing Python dependencies..."
-pip install -q pettingzoo gymnasium numpy flask flask-cors wandb sb3-contrib tensorboard ray
-pip install -q -e polyterra-env-py/
+uv sync
+uv pip install -e polyterra-env-py/
 echo "  Done."
 
 # Step 2: Build C# backend
