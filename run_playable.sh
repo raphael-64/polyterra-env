@@ -20,8 +20,8 @@ fi
 source .venv/bin/activate
 
 echo "Starting game server on http://localhost:5001"
-echo "Open training/polytopia_playable.html in your browser"
+echo "Open web/polytopia_playable.html in your browser"
 echo ""
 
-cd training
+cd web
 python game_server.py

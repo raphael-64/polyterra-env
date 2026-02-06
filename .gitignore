@@ -36,12 +36,6 @@ Thumbs.db
 # Project specific
 *.log
 
-# Training artifacts
-training/wandb/
-training/runs/
-training/replays/
-training/models/
-training/checkpoints/
 *.zip
 
 # Virtual environments

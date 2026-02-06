@@ -19,7 +19,7 @@ from polyterra_env.game_data_mappings import (
     UNIT_NAME_TO_IDX, IMPROVEMENT_NAME_TO_IDX,
     TECH_NAME_TO_IDX, TRIBE_NAME_TO_IDX
 )
-from polyterra_env._backend import find_backend_dll
+from polyterra_env._backend import find_backend
 
 
 class PolyterraEnv(AECEnv):
@@ -111,9 +111,12 @@ class PolyterraEnv(AECEnv):
         self.dotnet_path = dotnet_path
         self.use_action_masking = use_action_masking
 
-        # Auto-detect DLL path if not provided
+        # Auto-detect backend path if not provided
         if dll_path is None:
-            dll_path = find_backend_dll()
+            dll_path, self._self_contained = find_backend()
+        else:
+            # User provided explicit path - guess mode from extension
+            self._self_contained = not dll_path.endswith(".dll")
         self.dll_path = dll_path
 
         # Agent setup
@@ -1206,7 +1209,10 @@ class PolyterraEnv(AECEnv):
 
     def _start_process(self):
         """Start the C# game process"""
-        cmd = [self.dotnet_path, self.dll_path, "--env-server"]
+        if self._self_contained:
+            cmd = [self.dll_path, "--env-server"]
+        else:
+            cmd = [self.dotnet_path, self.dll_path, "--env-server"]
 
         self.process = subprocess.Popen(
             cmd,

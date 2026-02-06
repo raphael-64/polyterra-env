@@ -1,205 +1,131 @@
 # Polyterra Environment
 
-A PettingZoo-compatible reinforcement learning environment for The Battle of Polytopia.
-
-## Overview
-
-This project provides a Python RL environment that communicates with a C# game engine via JSON subprocess. It supports multi-agent training with full game state observation and comprehensive action spaces.
-
-## Project Structure
-
-```
-polyterra-env/
-├── polyterra-env-py/          # Python PettingZoo environment
-│   ├── polyterra_env.py       # Main environment class
-│   ├── game_data_mappings.py  # Game data index mappings
-│   └── tests/                 # Test suite
-├── csharp-backend/            # C# game engine bridge
-│   ├── PolyterraEnvBridge.cs  # RL environment bridge
-│   ├── Program.cs             # Server entry point
-│   └── *.cs                   # Supporting classes
-├── polytopia-game-logic/      # Decompiled game logic (dependencies)
-│   ├── GameLogicAssembly/     # Core game logic
-│   └── PolytopiaBackendBase/  # Backend helpers
-└── README.md                  # Documentation
-```
+A PettingZoo-compatible multi-agent reinforcement learning environment for The Battle of Polytopia.
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.8+
-- .NET 8.0 SDK
-- PettingZoo, Gymnasium, NumPy
-
-### Setup
-
-1. **Install Python dependencies:**
 ```bash
-cd polyterra-env-py
-pip install pettingzoo gymnasium numpy
+pip install polyterra-env
 ```
 
-2. **Build C# backend:**
-```bash
-cd csharp-backend
-dotnet build
-```
+That's it. The C# game engine is bundled — no .NET SDK or extra build steps required.
 
-## Usage
+> **Note:** Currently only supports macOS ARM (Apple Silicon). Linux/x64 support coming soon.
 
-### Basic Example
+## Quick Start
 
 ```python
 from polyterra_env import PolyterraEnv
 import numpy as np
 
-# Create environment
-env = PolyterraEnv(
-    num_players=4,
-    game_mode="perfection",
-    max_turns=30,
-    render_mode="human"
-)
-
-# Reset environment
+env = PolyterraEnv(num_players=2)
 env.reset(seed=42)
 
 # Game loop
-for agent in env.agent_iter():
+while env.agents:
+    agent = env.agent_selection
     obs = env.observe(agent)
 
-    # Simple policy: end turn
-    action = np.array([0, 0, 0, 0, 0, 0])  # END_TURN
+    # Pick a random valid action
+    mask = obs["valid_actions_mask"]
+    valid_indices = np.where(mask == 1)[0]
+    action = int(np.random.choice(valid_indices))
 
     env.step(action)
 
-    if env.terminations[agent] or env.truncations[agent]:
+    if all(env.terminations.get(a, False) for a in env.possible_agents):
         break
 
 env.close()
 ```
 
-### Logging Game States for Visualization
+## Observation Space
 
-The environment doesn't include rendering to keep training fast. Instead, save interesting game states during training:
+The observation is a `Dict` containing:
 
-```python
-from polyterra_env import PolyterraEnv
+| Key | Description |
+|-----|-------------|
+| `turn` | Current game turn |
+| `currency` | Stars (in-game currency) |
+| `score` | Current score |
+| `tiles` | Full map state — terrain, improvements, units, visibility |
+| `units` | List of own units with type, health, position, status |
+| `cities` | List of own cities with level, population, production |
+| `opponents` | Partial info on other players (fog of war) |
+| `available_techs` | One-hot vector of researchable technologies |
+| `valid_actions_list` | Padded list of 512 action dicts |
+| `valid_actions_mask` | Binary mask over the 512 action slots |
 
-env = PolyterraEnv(render_mode=None)  # No rendering overhead
-env.reset(seed=42)
+## Action Space
 
-# During training, save interesting moments
-for agent in env.agent_iter():
-    obs = env.observe(agent)
-    action = policy(obs)
-    env.step(action)
+`Discrete(512)` — the agent picks an index into `valid_actions_list`.
 
-    # Save state when something interesting happens
-    if high_reward or novel_strategy:
-        state = env.get_state_snapshot()
-        save_to_file(state)  # For later visualization
+Each valid action is a dict with a `type` field:
 
-env.close()
+- `end_turn` — end the current turn
+- `move` — move a unit
+- `attack` — attack an enemy
+- `build` — build an improvement (farm, mine, etc.)
+- `train` — train a unit at a city
+- `research` — research a technology
+- `capture` — capture a village/city
+- `harvest` — harvest a resource
+- `city_reward` — choose a city level-up reward
+
+Use `valid_actions_mask` for action masking during training.
+
+## Training
+
+For training scripts (PPO, RLlib self-play, replay recording), see [polyterra-training](https://github.com/raphael-64/polyterra-training).
+
+## Web UI
+
+A playable web interface is included for testing:
+
+```bash
+./run_playable.sh
+# Then open web/polytopia_playable.html in your browser
 ```
 
-See `example_training_with_logging.py` for a complete example.
+## Game Modes
+
+- **Perfection** — score-based, fixed number of turns (default 30)
+- **Domination** — last player standing
+
+## Development Setup
+
+To modify the C# backend or Python environment:
+
+```bash
+git clone https://github.com/yourusername/polyterra-env.git
+cd polyterra-env
+./setup.sh   # Builds C# backend + installs Python deps
+```
+
+Requires .NET 8.0 SDK for development only. End users don't need it.
 
 ### Running Tests
 
 ```bash
-cd polyterra-env-py/tests
-python test_integration.py
-python test_comprehensive_spaces.py
+pytest tests/
 ```
 
-## Environment Details
+### Project Structure
 
-### Observation Space
-
-The observation is a Dict containing:
-
-- **Global State**: turn, current_player_idx
-- **Player State**: currency, score, tribe, cities, kills, technologies
-- **Map State**: 256 tiles with terrain, improvements, units, visibility
-- **Units**: List of own units with health, position, status
-- **Cities**: List of own cities with level, population, production
-- **Opponents**: Partial information (fog of war)
-- **Action Mask**: Valid actions (10,000 possible)
-
-### Action Space
-
-MultiDiscrete space with 6 components:
 ```
-[action_type, target_x, target_y, unit_id_idx, param1, param2]
+polyterra-env/
+├── src/polyterra_env/        # Python package
+│   ├── env.py                # PettingZoo AEC environment
+│   ├── game_data_mappings.py # Entity name/index mappings
+│   ├── _backend.py           # C# binary discovery
+│   └── backend/              # Bundled C# binary (gitignored)
+├── csharp-backend/           # C# game engine source
+├── polytopia-game-logic/     # Game logic (C# dependency)
+├── web/                      # Playable web UI & game server
+├── tests/                    # Test suite
+└── scripts/build_backend.py  # Build script for C# backend
 ```
-
-Supports 37 command types:
-- 0: END_TURN
-- 1: MOVE
-- 2: ATTACK
-- 3: BUILD
-- 4: TRAIN
-- 5: RESEARCH
-- 6: UPGRADE
-- 7-36: RECOVER, HEAL, PROMOTE, DISBAND, DESTROY, etc.
-
-### Game Modes
-
-- **Perfection**: Score-based, 30 turns
-- **Domination**: Last player standing
-
-## Features
-
-- Multi-agent support (2-4 players)
-- Fog of war (partial observability)
-- Full game state access
-- Parameterized action space
-- Comprehensive observation space
-- Turn-based gameplay
-- Compatible with RL libraries (Stable-Baselines3, RLlib)
-
-## Architecture
-
-The environment uses a client-server architecture:
-
-1. **Python Environment** (`polyterra_env.py`) - PettingZoo interface
-2. **C# Backend** (`PolyterraBackend`) - Game engine and logic
-3. **JSON Protocol** - Communication via subprocess stdin/stdout
-
-The C# backend handles:
-- Game state management
-- Action validation
-- Map generation
-- Game rules enforcement
-
-The Python environment handles:
-- RL interface (observation/action spaces)
-- Agent coordination
-- Reward calculation
-- Episode management
-
-## Development
-
-### Adding New Actions
-
-1. Add action type constant in `polyterra_env.py` (line 62-77)
-2. Implement conversion in `_action_to_command()` (line 522+)
-3. Update C# backend `HandleStep()` to process new command
-
-### Modifying Observations
-
-1. Update `observation_space()` definition (line 134+)
-2. Modify `_parse_observation()` to extract new fields (line 319+)
-3. Update C# backend `GetObservation()` to include new data
 
 ## License
 
 This project uses decompiled game logic from The Battle of Polytopia for educational and research purposes. All game assets and logic remain property of Midjiwan AB.
-
-## Credits
-
-- Game: The Battle of Polytopia by Midjiwan AB
-- Environment: PettingZoo framework
-- Backend: .NET 8.0 with decompiled game logic
