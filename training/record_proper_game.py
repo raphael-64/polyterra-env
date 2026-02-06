@@ -1,7 +1,4 @@
 """Record a proper game with smart action selection using valid_actions."""
-import sys
-sys.path.insert(0, '../polyterra-env-py')
-
 import numpy as np
 from polyterra_env import PolyterraEnv
 from replay_system import ReplayRecorder
@@ -86,14 +83,14 @@ while step_count < max_steps:
         elif choice_type == "research":
             tech_name = selected  # This is the tech name string like "Climbing"
             # Look up the actual tech type index from mapping
-            from game_data_mappings import TECH_NAME_TO_IDX
+            from polyterra_env.game_data_mappings import TECH_NAME_TO_IDX
             tech_idx = TECH_NAME_TO_IDX.get(tech_name.lower(), 0)
             action = (5, 0, 0, 0, tech_idx, 0)
             action_name = f"RESEARCH {tech_name}"
 
         elif choice_type == "build":
             # ACTION_BUILD = 3, param1 = improvement type index
-            from game_data_mappings import IMPROVEMENT_NAME_TO_IDX
+            from polyterra_env.game_data_mappings import IMPROVEMENT_NAME_TO_IDX
             imp_name = selected.get('improvement_type', 'Farm')
             imp_idx = IMPROVEMENT_NAME_TO_IDX.get(imp_name.lower(), 5)  # 5 = Farm
             action = (3, selected["x"], selected["y"], 0, imp_idx, 0)

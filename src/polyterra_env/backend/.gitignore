@@ -1,0 +1,4 @@
+# Built C# backend binaries (populated by scripts/build_backend.py)
+*
+!.gitkeep
+!.gitignore

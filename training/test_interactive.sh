@@ -1,10 +1,7 @@
 #!/bin/bash
 # Quick test of the interactive game
 python3 << 'PYTHON'
-import sys
-sys.path.insert(0, '/Users/raphael/Documents/GitHub/polyterra-env/polyterra-env-py')
-
-from play_game import *
+from polyterra_env import PolyterraEnv, env
 import numpy as np
 
 print("Quick test of interactive game wrapper...")

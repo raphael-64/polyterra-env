@@ -10,7 +10,9 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
-if [ ! -f "csharp-backend/bin/Debug/net8.0/PolyterraBackend.dll" ]; then
+# Check for backend DLL in bundled location or dev location
+if [ ! -f "src/polyterra_env/backend/PolyterraBackend.dll" ] && \
+   [ ! -f "csharp-backend/bin/Debug/net8.0/PolyterraBackend.dll" ]; then
     echo "C# backend not built. Run ./setup.sh first!"
     exit 1
 fi

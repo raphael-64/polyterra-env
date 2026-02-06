@@ -1,9 +1,6 @@
 """
 Simple PPO training for Polyterra.
 """
-import sys
-sys.path.insert(0, '../polyterra-env-py')
-
 import os
 import json
 import numpy as np

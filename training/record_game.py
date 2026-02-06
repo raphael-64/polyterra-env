@@ -1,9 +1,6 @@
 """
 Record a game with proper agent cycling and full map state.
 """
-import sys
-sys.path.insert(0, '../polyterra-env-py')
-
 import numpy as np
 from polyterra_env import PolyterraEnv
 from sb3_contrib import MaskablePPO

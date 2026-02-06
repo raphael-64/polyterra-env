@@ -2,9 +2,6 @@
 Flask server for playable Polytopia game.
 Wraps PolyterraEnv and exposes REST API for the web interface.
 """
-import sys
-sys.path.insert(0, '../polyterra-env-py')
-
 import json
 import numpy as np
 from flask import Flask, jsonify, request

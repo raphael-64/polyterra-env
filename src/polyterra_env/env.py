@@ -14,11 +14,12 @@ from pettingzoo.utils.agent_selector import agent_selector
 from pettingzoo.utils import wrappers
 
 # Import game data mappings
-from game_data_mappings import (
+from polyterra_env.game_data_mappings import (
     TERRAIN_NAME_TO_IDX, RESOURCE_NAME_TO_IDX,
     UNIT_NAME_TO_IDX, IMPROVEMENT_NAME_TO_IDX,
     TECH_NAME_TO_IDX, TRIBE_NAME_TO_IDX
 )
+from polyterra_env._backend import find_backend_dll
 
 
 class PolyterraEnv(AECEnv):
@@ -97,7 +98,7 @@ class PolyterraEnv(AECEnv):
             map_size: Map dimension (typically 16)
             render_mode: "human" or "ansi"
             dotnet_path: Path to dotnet executable
-            dll_path: Path to PolyterraTest.dll
+            dll_path: Path to PolyterraBackend.dll (auto-detected if None)
             use_action_masking: Enable action masking in observation
         """
         super().__init__()
@@ -112,12 +113,7 @@ class PolyterraEnv(AECEnv):
 
         # Auto-detect DLL path if not provided
         if dll_path is None:
-            import os
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            dll_path = os.path.join(
-                base_dir,
-                "csharp-backend/bin/Debug/net8.0/PolyterraBackend.dll"
-            )
+            dll_path = find_backend_dll()
         self.dll_path = dll_path
 
         # Agent setup
@@ -941,7 +937,7 @@ class PolyterraEnv(AECEnv):
 
         # BUILD - Requires improvement type, coordinates
         elif action_type == self.ACTION_BUILD:
-            from game_data_mappings import IMPROVEMENT_IDX_TO_NAME
+            from polyterra_env.game_data_mappings import IMPROVEMENT_IDX_TO_NAME
             improvement_name = IMPROVEMENT_IDX_TO_NAME.get(param1, "farm")
 
             return {
@@ -956,7 +952,7 @@ class PolyterraEnv(AECEnv):
 
         # TRAIN - Requires unit type, coordinates (city location)
         elif action_type == self.ACTION_TRAIN:
-            from game_data_mappings import UNIT_IDX_TO_NAME
+            from polyterra_env.game_data_mappings import UNIT_IDX_TO_NAME
             unit_type_name = UNIT_IDX_TO_NAME.get(param1, "warrior")
 
             return {
@@ -971,7 +967,7 @@ class PolyterraEnv(AECEnv):
 
         # RESEARCH - Requires tech type
         elif action_type == self.ACTION_RESEARCH:
-            from game_data_mappings import TECH_IDX_TO_NAME
+            from polyterra_env.game_data_mappings import TECH_IDX_TO_NAME
             tech_name = TECH_IDX_TO_NAME.get(param1, "riding")
 
             return {
@@ -984,7 +980,7 @@ class PolyterraEnv(AECEnv):
 
         # UPGRADE - Requires unit type, coordinates
         elif action_type == self.ACTION_UPGRADE:
-            from game_data_mappings import UNIT_IDX_TO_NAME
+            from polyterra_env.game_data_mappings import UNIT_IDX_TO_NAME
             unit_type_name = UNIT_IDX_TO_NAME.get(param1, "knight")
 
             return {
@@ -1096,7 +1092,7 @@ class PolyterraEnv(AECEnv):
 
         # HARVEST - Harvest resources (creates hidden improvements like hunting, fishing)
         elif action_type == self.ACTION_HARVEST:
-            from game_data_mappings import IMPROVEMENT_IDX_TO_NAME
+            from polyterra_env.game_data_mappings import IMPROVEMENT_IDX_TO_NAME
             improvement_name = IMPROVEMENT_IDX_TO_NAME.get(param1, "Hunting")
             return {
                 "command": "step",

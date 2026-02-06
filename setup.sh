@@ -27,7 +27,7 @@ echo "  python: $PYTHON_VERSION"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Step 1: Install Python deps with uv
+# Step 1: Install uv if needed
 echo ""
 echo "=== Step 1: Python environment ==="
 
@@ -36,30 +36,17 @@ if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 
-echo "Installing Python dependencies..."
-uv sync
-uv pip install -e polyterra-env-py/
-echo "  Done."
-
-# Step 2: Build C# backend
+# Step 2: Build C# backend and copy to package
 echo ""
 echo "=== Step 2: Building C# backend ==="
-cd "$SCRIPT_DIR/csharp-backend"
-dotnet build -c Debug --nologo -v q
+python3 scripts/build_backend.py
 echo "  Done."
 
-# Verify DLL exists
-DLL_PATH="$SCRIPT_DIR/csharp-backend/bin/Debug/net8.0/PolyterraBackend.dll"
-if [ ! -f "$DLL_PATH" ]; then
-    echo "ERROR: Build succeeded but DLL not found at $DLL_PATH"
-    exit 1
-fi
-
-# Verify gamedata.json exists next to DLL
-if [ ! -f "$SCRIPT_DIR/csharp-backend/bin/Debug/net8.0/gamedata.json" ]; then
-    echo "WARNING: gamedata.json not found in build output, copying..."
-    cp "$SCRIPT_DIR/csharp-backend/gamedata.json" "$SCRIPT_DIR/csharp-backend/bin/Debug/net8.0/"
-fi
+# Step 3: Install Python dependencies
+echo ""
+echo "=== Step 3: Installing Python dependencies ==="
+uv sync
+echo "  Done."
 
 echo ""
 echo "=== Setup complete! ==="
