@@ -29,6 +29,8 @@ except ImportError:
     print("wandb not available, logging to console only")
 
 
+_env_instance_count = 0
+
 class FlattenedPolyterraEnv(MultiAgentEnv):
     """
     RLlib MultiAgentEnv wrapper around PolyterraEnv.
@@ -40,6 +42,10 @@ class FlattenedPolyterraEnv(MultiAgentEnv):
     """
 
     def __init__(self, config=None):
+        global _env_instance_count
+        _env_instance_count += 1
+        self._instance_id = _env_instance_count
+        print(f"[ENV] Creating FlattenedPolyterraEnv instance #{self._instance_id}")
         super().__init__()
         config = config or {}
         self.num_players = config.get("num_players", 2)
@@ -120,6 +126,12 @@ class FlattenedPolyterraEnv(MultiAgentEnv):
         return np.array(flat + list(tile_grid.flatten()), dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
+        if not hasattr(self, '_reset_count'):
+            self._reset_count = 0
+        self._reset_count += 1
+        # Log every 50 resets to reduce spam
+        if self._reset_count % 50 == 0:
+            print(f"[ENV #{self._instance_id}] Reset #{self._reset_count}")
         self.env.reset(seed=seed)
         self.steps = 0
 
@@ -185,6 +197,13 @@ class FlattenedPolyterraEnv(MultiAgentEnv):
 
     def close(self):
         self.env.close()
+
+    def __del__(self):
+        """Ensure cleanup on garbage collection"""
+        try:
+            self.close()
+        except:
+            pass
 
     def render(self):
         pass
@@ -275,6 +294,10 @@ def main():
             policy_mapping_fn=lambda agent_id, episode, **kwargs: "shared_policy",
         )
         .resources(num_gpus=0)
+        .fault_tolerance(
+            restart_failed_sub_environments=True,  # Auto-restart crashed envs
+            num_consecutive_env_runner_failures_tolerance=100,
+        )
         .callbacks(SelfPlayCallback)
         .reporting(
             min_sample_timesteps_per_iteration=1000,

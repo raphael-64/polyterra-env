@@ -23,11 +23,21 @@ public class PolyterraEnvBridge
         this.maxTurns = maxTurns;
     }
 
+    private int commandCount = 0;
+
     /// <summary>
     /// Process JSON command and return JSON response
     /// </summary>
     public string ProcessCommand(string jsonCommand)
     {
+        commandCount++;
+        // Log every 50000 commands to stderr
+        if (commandCount % 50000 == 0)
+        {
+            Console.Error.WriteLine($"[Bridge] Processed {commandCount} commands");
+            Console.Error.Flush();
+        }
+
         try
         {
             var request = JsonSerializer.Deserialize<Request>(jsonCommand);
@@ -52,16 +62,28 @@ public class PolyterraEnvBridge
         }
     }
 
+    private int resetCount = 0;
+
     private string HandleReset(Request request)
     {
+        resetCount++;
+        Console.Error.WriteLine($"[Reset #{resetCount}] Starting...");
+        Console.Error.Flush();
+
         int numPlayers = request.num_players ?? 4;
         int seed = request.seed ?? new Random().Next();
         string gameMode = request.game_mode ?? "perfection";
 
         currentSeed = seed;
 
+        Console.Error.WriteLine($"[Reset #{resetCount}] Initializing game data...");
+        Console.Error.Flush();
+
         // Initialize game data
         GameDataLoader.InitializeDataManager();
+
+        Console.Error.WriteLine($"[Reset #{resetCount}] Creating game state...");
+        Console.Error.Flush();
 
         // Create game state
         gameState = new GameState();
@@ -119,6 +141,9 @@ public class PolyterraEnvBridge
             hasChosenTribe = true
         });
 
+        Console.Error.WriteLine($"[Reset #{resetCount}] Generating map...");
+        Console.Error.Flush();
+
         // Generate map with deterministic seed (like LocalClient/HotseatClient)
         int mapSize = gameState.Settings.MapSize;
         gameState.Map = new MapData((ushort)mapSize, (ushort)mapSize);
@@ -134,7 +159,13 @@ public class PolyterraEnvBridge
         var mapGenerator = new MapGenerator();
         mapGenerator.GenerateWithSeed(seed, gameState, mapSettings);
 
+        Console.Error.WriteLine($"[Reset #{resetCount}] Map generated, setting colors...");
+        Console.Error.Flush();
+
         GameStateUtils.SetPlayerColors(gameState);
+
+        Console.Error.WriteLine($"[Reset #{resetCount}] Spawning starting units...");
+        Console.Error.Flush();
 
         // Spawn starting units for each player (like LocalClient/HotseatClient do at lines 163-166)
         for (int i = 0; i < numPlayers; i++)
@@ -172,8 +203,11 @@ public class PolyterraEnvBridge
         gameState.ActionStack.Add(new StartTurnAction(gameState.PlayerStates[0].Id));
         ActionManagerUtils.PerformAllQueuedActions(gameState);
 
+        Console.Error.WriteLine($"[Reset #{resetCount}] Building response...");
+        Console.Error.Flush();
+
         // Return initial observations
-        return JsonSerializer.Serialize(new Response
+        var response = JsonSerializer.Serialize(new Response
         {
             success = true,
             observations = GetAllObservations(),
@@ -189,6 +223,11 @@ public class PolyterraEnvBridge
                 ["num_players"] = numPlayers
             }
         });
+
+        Console.Error.WriteLine($"[Reset #{resetCount}] Complete, response size: {response.Length} bytes");
+        Console.Error.Flush();
+
+        return response;
     }
 
     private string HandleStep(Request request)
@@ -207,15 +246,15 @@ public class PolyterraEnvBridge
         while (gameState.CurrentPlayerIndex < gameState.PlayerStates.Count &&
                gameState.PlayerStates[gameState.CurrentPlayerIndex].Id == byte.MaxValue)
         {
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Skipping Nature at index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Skipping Nature at index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
             gameState.EndPlayerTurn();
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After skipping Nature: index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After skipping Nature: index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
         }
 
         var playerIndex = gameState.CurrentPlayerIndex;
         var player = gameState.PlayerStates[playerIndex];
 
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Before action: Player {player.Id}, Index {playerIndex}, Turn {gameState.CurrentTurn}, Currency {player.Currency}\n");
+        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Before action: Player {player.Id}, Index {playerIndex}, Turn {gameState.CurrentTurn}, Currency {player.Currency}\n");
 
         // Parse and execute command based on action_type
         CommandBase command;
@@ -255,14 +294,14 @@ public class PolyterraEnvBridge
                 prodBefore = cityTile?.improvement?.production ?? 0;
                 borderBefore = cityTile?.improvement?.borderSize ?? 0;
                 bool hasImprovement = cityTile?.improvement != null;
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] BEFORE: tile exists={cityTile != null}, hasImprovement={hasImprovement}, production={prodBefore}, borderSize={borderBefore}, reward={cityRewardCmd.Reward}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] BEFORE: tile exists={cityTile != null}, hasImprovement={hasImprovement}, production={prodBefore}, borderSize={borderBefore}, reward={cityRewardCmd.Reward}\n");
             }
 
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Executing command: {command.GetType().Name}, Player currency before: {currencyBefore}\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Executing command: {command.GetType().Name}, Player currency before: {currencyBefore}\n");
             success = actionManager.ExecuteCommand(command, out error);
 
             int currencyAfter = player.Currency;
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Command executed, success={success}, error={error}, Currency: {currencyBefore} -> {currencyAfter} (delta={currencyAfter - currencyBefore})\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Command executed, success={success}, error={error}, Currency: {currencyBefore} -> {currencyAfter} (delta={currencyAfter - currencyBefore})\n");
 
             // Extra logging for city reward commands
             if (command is CityRewardCommand cityRewardCmd2)
@@ -270,7 +309,7 @@ public class PolyterraEnvBridge
                 var cityTile = gameState.Map.GetTile(cityRewardCmd2.Coordinates);
                 int prodAfter = cityTile?.improvement?.production ?? 0;
                 int borderAfter = cityTile?.improvement?.borderSize ?? 0;
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] AFTER: production={prodBefore}->{prodAfter}, borderSize={borderBefore}->{borderAfter}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] AFTER: production={prodBefore}->{prodAfter}, borderSize={borderBefore}->{borderAfter}\n");
 
                 // Count tiles owned by player near city
                 int ownedTiles = 0;
@@ -281,13 +320,13 @@ public class PolyterraEnvBridge
                         if (t.owner == player.Id) ownedTiles++;
                     }
                 }
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Tiles owned in border area: {ownedTiles}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Tiles owned in border area: {ownedTiles}\n");
 
                 // Log ActionStack after city reward to see if Explorer/Scout was added
                 if (gameState.ActionStack?.Count > 0)
                 {
                     var actionTypes = string.Join(", ", gameState.ActionStack.Select(a => a.GetType().Name));
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] ActionStack after reward: {actionTypes}\n");
+                    // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] ActionStack after reward: {actionTypes}\n");
                 }
 
                 // Log explored tile count for Explorer reward tracking
@@ -296,21 +335,21 @@ public class PolyterraEnvBridge
                 {
                     if (tile.GetExplored(player.Id)) exploredCount++;
                 }
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Total explored tiles: {exploredCount}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Total explored tiles: {exploredCount}\n");
             }
         }
 
         // Process actions and triggers in a loop until both are empty
         // IMPORTANT: PerformAllQueuedActions returns early if there are pending triggers,
         // so we must resolve triggers first, then process actions, and repeat
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Calling ProcessActionsAndTriggers, ActionStack count: {gameState.ActionStack?.Count ?? 0}\n");
+        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Calling ProcessActionsAndTriggers, ActionStack count: {gameState.ActionStack?.Count ?? 0}\n");
         ProcessActionsAndTriggers();
         int exploredAfterProcessing = 0;
         foreach (var tile in gameState.Map.Tiles)
         {
             if (tile.GetExplored(player.Id)) exploredAfterProcessing++;
         }
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After ProcessActionsAndTriggers, Player currency: {player.Currency}, ActionStack count: {gameState.ActionStack?.Count ?? 0}, Explored tiles: {exploredAfterProcessing}\n");
+        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After ProcessActionsAndTriggers, Player currency: {player.Currency}, ActionStack count: {gameState.ActionStack?.Count ?? 0}, Explored tiles: {exploredAfterProcessing}\n");
 
         if (!success)
         {
@@ -321,14 +360,14 @@ public class PolyterraEnvBridge
             });
         }
 
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After action: Player {gameState.PlayerStates[gameState.CurrentPlayerIndex].Id}, Index {gameState.CurrentPlayerIndex}, Turn {gameState.CurrentTurn}\n");
+        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After action: Player {gameState.PlayerStates[gameState.CurrentPlayerIndex].Id}, Index {gameState.CurrentPlayerIndex}, Turn {gameState.CurrentTurn}\n");
 
         // Debug: Log all unit health after action
         foreach (var t in gameState.Map.Tiles)
         {
             if (t.unit != null)
             {
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitHealth] ({t.coordinates.X},{t.coordinates.Y}): owner={t.unit.owner}, health={t.unit.health}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[UnitHealth] ({t.coordinates.X},{t.coordinates.Y}): owner={t.unit.owner}, health={t.unit.health}\n");
             }
         }
 
@@ -338,9 +377,9 @@ public class PolyterraEnvBridge
         while (gameState.CurrentPlayerIndex < gameState.PlayerStates.Count &&
                gameState.PlayerStates[gameState.CurrentPlayerIndex].Id == byte.MaxValue)
         {
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Skipping Nature after action at index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Skipping Nature after action at index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
             gameState.EndPlayerTurn();
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After skipping Nature: index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] After skipping Nature: index {gameState.CurrentPlayerIndex}, turn {gameState.CurrentTurn}\n");
             skippedNature = true;
         }
 
@@ -350,7 +389,7 @@ public class PolyterraEnvBridge
         {
             gameState.ActionStack.Add(new StartTurnAction(gameState.CurrentPlayer));
             ActionManagerUtils.PerformAllQueuedActions(gameState);
-            File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Added StartTurnAction for player {gameState.CurrentPlayer} after skipping Nature\n");
+            // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[HandleStep] Added StartTurnAction for player {gameState.CurrentPlayer} after skipping Nature\n");
         }
 
         // Check if game ended
@@ -416,7 +455,7 @@ public class PolyterraEnvBridge
                 int targetX = GetIntParam(actionParams, "target_x");
                 int targetY = GetIntParam(actionParams, "target_y");
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[Attack] from ({fromX},{fromY}) to ({targetX},{targetY})\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[Attack] from ({fromX},{fromY}) to ({targetX},{targetY})\n");
 
                 var fromCoords = new WorldCoordinates((ushort)fromX, (ushort)fromY);
                 var fromTile = gameState.Map.GetTile(fromCoords);
@@ -426,7 +465,7 @@ public class PolyterraEnvBridge
 
                 if (fromTile?.unit != null && targetTile?.unit != null)
                 {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[Attack] Attacker health: {fromTile.unit.health}, Defender health: {targetTile.unit.health}\n");
+                    // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[Attack] Attacker health: {fromTile.unit.health}, Defender health: {targetTile.unit.health}\n");
                 }
 
                 if (fromTile?.unit == null)
@@ -459,14 +498,14 @@ public class PolyterraEnvBridge
                 int y = GetIntParam(actionParams, "city_y");
                 string unitTypeStr = GetStringParam(actionParams, "unit_type");
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[Train] Received unit_type string: \"{unitTypeStr}\"\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[Train] Received unit_type string: \"{unitTypeStr}\"\n");
 
                 if (!Enum.TryParse<UnitData.Type>(unitTypeStr, true, out var unitType))
                 {
                     throw new Exception($"Invalid unit type: {unitTypeStr}");
                 }
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[Train] Parsed to enum: {unitType} (value={(int)unitType})\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[Train] Parsed to enum: {unitType} (value={(int)unitType})\n");
 
                 var coords = new WorldCoordinates((ushort)x, (ushort)y);
                 return new TrainCommand(player.Id, unitType, coords);
@@ -543,12 +582,12 @@ public class PolyterraEnvBridge
                 int y = GetIntParam(actionParams, "y");
                 string rewardStr = GetStringParam(actionParams, "reward");
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Received: x={x}, y={y}, reward={rewardStr}, player={player.Id}, currency BEFORE={player.Currency}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Received: x={x}, y={y}, reward={rewardStr}, player={player.Id}, currency BEFORE={player.Currency}\n");
 
                 if (!Enum.TryParse<CityReward>(rewardStr, true, out var reward))
                     throw new Exception($"Invalid city reward: {rewardStr}");
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Parsed reward enum: {reward} (value={(int)reward})\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] Parsed reward enum: {reward} (value={(int)reward})\n");
 
                 var coords = new WorldCoordinates((ushort)x, (ushort)y);
 
@@ -557,7 +596,7 @@ public class PolyterraEnvBridge
                     trigger.type != CommandTriggerType.CityLevelUp ||
                     trigger.coordinates != coords)
                 {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] ERROR: No pending trigger at ({x}, {y})\n");
+                    // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] ERROR: No pending trigger at ({x}, {y})\n");
                     throw new Exception($"No pending city level up at ({x}, {y})");
                 }
 
@@ -566,7 +605,7 @@ public class PolyterraEnvBridge
                 int cityLevel = cityTile?.improvement?.level ?? -1;
                 int cityProd = cityTile?.improvement?.production ?? 0;
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] City at ({x},{y}): level={cityLevel}, production={cityProd}, Creating CityRewardCommand for {reward}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[CityReward] City at ({x},{y}): level={cityLevel}, production={cityProd}, Creating CityRewardCommand for {reward}\n");
                 return new CityRewardCommand(player.Id, reward, coords);
             }
 
@@ -905,7 +944,7 @@ public class PolyterraEnvBridge
         int iterations = 0;
         byte currentPlayer = gameState.CurrentPlayer;
 
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Starting, currentPlayer={currentPlayer}\n");
+        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Starting, currentPlayer={currentPlayer}\n");
 
         while (iterations++ < maxIterations)
         {
@@ -918,25 +957,25 @@ public class PolyterraEnvBridge
                 var p = gameState.PlayerStates[pIdx];
                 if (gameState.TryGetPendingCommandTrigger(p.Id, out var trigger))
                 {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Found trigger for player {p.Id}: {trigger.type}\n");
+                    // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Found trigger for player {p.Id}: {trigger.type}\n");
 
                     // Skip CityLevelUp for current player - let agent choose reward
                     if (trigger.type == CommandTriggerType.CityLevelUp && p.Id == currentPlayer)
                     {
-                        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Skipping CityLevelUp for current player\n");
+                        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Skipping CityLevelUp for current player\n");
                         continue;
                     }
 
                     // Auto-resolve other triggers (or CityLevelUp for other players)
                     if (CommandTriggerUtils.TryGetTriggerCommand(gameState, out var triggerCmd))
                     {
-                        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Auto-resolving trigger with {triggerCmd.GetType().Name}\n");
+                        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Auto-resolving trigger with {triggerCmd.GetType().Name}\n");
                         actionManager.ExecuteCommand(triggerCmd, out _);
                         hadTrigger = true;
                     }
                     else
                     {
-                        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Failed to get trigger command\n");
+                        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Failed to get trigger command\n");
                         break;
                     }
                 }
@@ -948,30 +987,30 @@ public class PolyterraEnvBridge
             {
                 // Log what's in the ActionStack
                 var actionTypes = string.Join(", ", gameState.ActionStack.Select(a => a.GetType().Name));
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] ActionStack has {gameState.ActionStack.Count} items: {actionTypes}\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] ActionStack has {gameState.ActionStack.Count} items: {actionTypes}\n");
 
                 // Check if current player has a CityLevelUp trigger blocking action processing
                 if (gameState.TryGetPendingCommandTrigger(currentPlayer, out var blockingTrigger) &&
                     blockingTrigger.type == CommandTriggerType.CityLevelUp)
                 {
-                    File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Blocked by CityLevelUp trigger, breaking\n");
+                    // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Blocked by CityLevelUp trigger, breaking\n");
                     // Actions are blocked until agent chooses city reward
                     break;
                 }
 
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Calling PerformAllQueuedActions\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Calling PerformAllQueuedActions\n");
                 ActionManagerUtils.PerformAllQueuedActions(gameState);
                 hadAction = true;
             }
 
             if (!hadTrigger && !hadAction)
             {
-                File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] No trigger or action, breaking\n");
+                // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] No trigger or action, breaking\n");
                 break;
             }
         }
 
-        File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Done after {iterations} iterations\n");
+        // DEBUG: File.AppendAllText("/tmp/polyterra-debug.log", $"[ProcessActionsAndTriggers] Done after {iterations} iterations\n");
     }
 
     private Dictionary<string, object> GetValidActions(PlayerState player)

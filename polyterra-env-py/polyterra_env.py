@@ -135,6 +135,9 @@ class PolyterraEnv(AECEnv):
 
         # C# subprocess
         self.process = None
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 10  # End episode after this many errors
+        self._command_count = 0  # Track commands for debugging
 
     @functools.lru_cache(maxsize=None)
     def observation_space(self, agent):
@@ -266,22 +269,37 @@ class PolyterraEnv(AECEnv):
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Reset the environment"""
-        # Start C# subprocess if not running
+        # Start C# subprocess if not running, or restart if dead
         if self.process is None:
+            self._start_process()
+        elif self.process.poll() is not None:
+            # Process died (e.g., laptop sleep) - restart it
+            print(f"[PolyterraEnv] C# process died (exit code {self.process.returncode}), restarting...")
+            self.process = None
             self._start_process()
 
         # Send reset command
+        # Generate seed here so we can log it before potential hang
+        import random as py_random
+        actual_seed = seed if seed is not None else py_random.randint(0, 2**31 - 1)
+
         command = {
             "command": "reset",
-            "seed": seed,
+            "seed": actual_seed,
             "num_players": self.num_players,
             "game_mode": self.game_mode
         }
+
+        # Log seed before sending (in case it hangs)
+        print(f"[PolyterraEnv] Reset with seed={actual_seed}", flush=True)
 
         response = self._send_command(command)
 
         if not response.get("success"):
             raise RuntimeError(f"Reset failed: {response.get('error')}")
+
+        # Reset error counter
+        self._consecutive_errors = 0
 
         # Initialize agent tracking
         self.agents = response["agents"].copy()
@@ -541,6 +559,9 @@ class PolyterraEnv(AECEnv):
 
         # Attacks
         for attack in valid_actions.get('valid_attacks', []):
+            # Skip malformed attacks missing required fields
+            if attack.get("target_x") is None or attack.get("target_y") is None:
+                continue
             flat_actions.append({
                 "type": "attack",
                 "action_type": self.ACTION_ATTACK,
@@ -683,17 +704,27 @@ class PolyterraEnv(AECEnv):
         response = self._send_command(command)
 
         if not response.get("success"):
+            self._consecutive_errors += 1
+
+            # Too many errors - CRASH with details so user can fix the issue
+            if self._consecutive_errors >= self._max_consecutive_errors:
+                raise RuntimeError(
+                    f"[PolyterraEnv] {self._consecutive_errors} consecutive errors!\n"
+                    f"Last error: {response.get('error')}\n"
+                    f"Error type: {response.get('error_type')}\n"
+                    f"This indicates a bug in the C# backend that needs to be fixed."
+                )
+
             # Invalid action - penalize but DON'T terminate agent
-            # Terminating on invalid action would end episode too quickly during training
             self._clear_rewards()
             self.rewards[agent] = -1.0  # Small negative reward for invalid action
             self.infos[agent] = {"error": response.get("error"), "invalid_action": True}
             # The agent still has the turn - they need to pick a valid action or END_TURN
-            # Don't change agent_selection - let them try again
             return
 
         # Action succeeded - update state
         else:
+            self._consecutive_errors = 0  # Reset error counter on success
             # Update state from response
             self.agents = response["agents"]
             self._raw_observations = response["observations"]
@@ -754,6 +785,12 @@ class PolyterraEnv(AECEnv):
             }
 
         elif action_type == "attack":
+            # Validate attack has required coordinates
+            target_x = action_dict.get("target_x")
+            target_y = action_dict.get("target_y")
+            if target_x is None or target_y is None:
+                print(f"WARNING: Attack missing target coordinates: {action_dict}")
+                return {"command": "step", "action_type": "end_turn", "action_params": {}}
             return {
                 "command": "step",
                 "action_type": "attack",
@@ -761,8 +798,8 @@ class PolyterraEnv(AECEnv):
                     "unit_id": action_dict["unit_id"],
                     "from_x": action_dict["from_x"],
                     "from_y": action_dict["from_y"],
-                    "target_x": action_dict["target_x"],
-                    "target_y": action_dict["target_y"],
+                    "target_x": target_x,
+                    "target_y": target_y,
                 }
             }
 
@@ -1152,11 +1189,24 @@ class PolyterraEnv(AECEnv):
     def close(self):
         """Clean up resources"""
         if self.process is not None:
-            command = {"command": "close"}
-            self._send_command(command)
-            self.process.terminate()
-            self.process.wait()
+            try:
+                command = {"command": "close"}
+                self._send_command(command)
+            except:
+                pass  # Process might already be dead
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=2)
+            except:
+                try:
+                    self.process.kill()  # Force kill if terminate doesn't work
+                except:
+                    pass
             self.process = None
+
+    def __del__(self):
+        """Ensure cleanup on garbage collection"""
+        self.close()
 
     def _start_process(self):
         """Start the C# game process"""
@@ -1177,21 +1227,67 @@ class PolyterraEnv(AECEnv):
 
     def _send_command(self, command: dict) -> dict:
         """Send JSON command to C# process and get response"""
+        import select
+        import sys
+
         if self.process is None:
             raise RuntimeError("Process not started")
 
+        # Check if process is still alive
+        if self.process.poll() is not None:
+            raise RuntimeError(f"C# process died with exit code {self.process.returncode}")
+
+        # Track command count for debugging
+        self._command_count += 1
+        cmd_num = self._command_count
+
+        # Log every 10000 commands to track progress
+        if cmd_num % 10000 == 0:
+            print(f"[PolyterraEnv] Command #{cmd_num}: {command.get('command')}")
+
         # Send command
         json_str = json.dumps(command)
-        self.process.stdin.write(json_str + "\n")
-        self.process.stdin.flush()
+        try:
+            self.process.stdin.write(json_str + "\n")
+            self.process.stdin.flush()
+        except BrokenPipeError:
+            raise RuntimeError("C# process stdin pipe broken - process likely crashed")
 
-        # Read response
+        # Read response with timeout (30 seconds)
+        # Use select on Unix to implement timeout
+        timeout_seconds = 30
+        if sys.platform != 'win32':
+            ready, _, _ = select.select([self.process.stdout], [], [], timeout_seconds)
+            if not ready:
+                # Check if process died
+                if self.process.poll() is not None:
+                    stderr_output = self.process.stderr.read() if self.process.stderr else ""
+                    raise RuntimeError(f"C# process died. Exit code: {self.process.returncode}. Stderr: {stderr_output[:500]}")
+                # Process is alive but unresponsive - kill it so next reset can restart
+                print(f"[PolyterraEnv] C# process unresponsive after {timeout_seconds}s, killing...")
+                try:
+                    self.process.kill()
+                    self.process.wait(timeout=2)
+                except:
+                    pass
+                self.process = None
+                raise RuntimeError(f"Timeout waiting for C# response after {timeout_seconds}s. Command #{cmd_num}: {command.get('command')}, action: {command.get('action_type')}")
+
         response_str = self.process.stdout.readline()
 
         if not response_str:
-            raise RuntimeError("No response from game process")
+            stderr_output = self.process.stderr.read() if self.process.stderr else ""
+            raise RuntimeError(f"No response from game process. Stderr: {stderr_output[:500]}")
 
-        return json.loads(response_str)
+        response = json.loads(response_str)
+
+        # Check for error response from C# (error_type is only set on actual errors)
+        if response.get("error_type"):
+            print(f"[PolyterraEnv] C# error: {response.get('error_type')}: {response.get('error')}")
+            # Treat as failed action, let step() handle it
+            response["success"] = False
+
+        return response
 
     # ===== NAME TO INDEX MAPPINGS =====
     # Using imported game data mappings
